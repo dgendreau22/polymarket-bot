@@ -10,17 +10,135 @@ export interface PolymarketConfig {
   gammaHost: string;
 }
 
+export interface MarketEvent {
+  id: string;
+  ticker: string;
+  slug: string;
+  title: string;
+  description: string;
+  startDate: string;
+  creationDate: string;
+  endDate: string;
+  image: string;
+  icon: string;
+  active: boolean;
+  closed: boolean;
+  archived: boolean;
+  featured: boolean;
+  restricted: boolean;
+  liquidity: number;
+  volume: number;
+  openInterest: number;
+  sortBy: string;
+  category: string;
+  competitive: number;
+  volume24hr: number;
+  volume1wk: number;
+  volume1mo: number;
+  volume1yr: number;
+  liquidityAmm: number;
+  liquidityClob: number;
+  commentCount: number;
+  cyom: boolean;
+  closedTime: string;
+  showAllOutcomes: boolean;
+  showMarketImages: boolean;
+  enableNegRisk: boolean;
+  negRiskAugmented: boolean;
+}
+
 export interface Market {
+  // Core identifiers
   id: string;
   question: string;
+  conditionId: string;
+  slug: string;
+  clobTokenIds: string[];
+
+  // Market state
+  active: boolean;
+  closed: boolean;
+  closedTime: string;
+  endDate: string;
+  endDateIso: string;
+  archived: boolean;
+  restricted: boolean;
+
+  // Pricing & outcomes
   outcomes: string[];
   outcomePrices: string[];
   volume: string;
+  volumeNum: number;
   liquidity: string;
-  active: boolean;
-  closed: boolean;
-  conditionId: string;
-  slug: string;
+  liquidityNum: number;
+
+  // Time-based volumes
+  volume24hr: number;
+  volume1wk: number;
+  volume1mo: number;
+  volume1yr: number;
+  volume1wkAmm: number;
+  volume1moAmm: number;
+  volume1yrAmm: number;
+  volume1wkClob: number;
+  volume1moClob: number;
+  volume1yrClob: number;
+
+  // Order book stats
+  bestBid: number;
+  bestAsk: number;
+  spread: number;
+  lastTradePrice: number;
+
+  // Price changes
+  oneHourPriceChange: number;
+  oneDayPriceChange: number;
+  oneWeekPriceChange: number;
+  oneMonthPriceChange: number;
+  oneYearPriceChange: number;
+
+  // Media & display
+  image: string;
+  icon: string;
+  description: string;
+  category: string;
+  twitterCardImage: string;
+
+  // Events
+  events: MarketEvent[];
+
+  // Market configuration
+  marketType: string;
+  marketMakerAddress: string;
+  fpmmLive: boolean;
+  creator: string;
+  ready: boolean;
+  funded: boolean;
+  approved: boolean;
+  cyom: boolean;
+  competitive: number;
+
+  // Rewards & fees
+  rewardsMinSize: number;
+  rewardsMaxSpread: number;
+  rfqEnabled: boolean;
+  holdingRewardsEnabled: boolean;
+  feesEnabled: boolean;
+
+  // Metadata
+  createdAt: string;
+  updatedAt: string;
+  updatedBy: number;
+  hasReviewedDates: boolean;
+  readyForCron: boolean;
+  clearBookOnStart: boolean;
+  manualActivation: boolean;
+  negRiskOther: boolean;
+  pendingDeployment: boolean;
+  deploying: boolean;
+  pagerDutyNotificationEnabled: boolean;
+  mailchimpTag: string;
+  umaResolutionStatuses: string;
 }
 
 export interface OrderBook {

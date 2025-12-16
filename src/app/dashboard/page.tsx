@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, TrendingUp, Activity, AlertCircle, Wallet, DollarSign } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { RefreshCw, TrendingUp, Activity, AlertCircle, Wallet, DollarSign, Search, ChevronLeft, ChevronRight } from "lucide-react";
 
 interface BotStatus {
   configured: boolean;
@@ -38,48 +39,85 @@ interface Market {
   active: boolean;
 }
 
+interface SearchPagination {
+  hasMore: boolean;
+  page: number;
+}
+
 export default function DashboardPage() {
   const [status, setStatus] = useState<BotStatus | null>(null);
   const [markets, setMarkets] = useState<Market[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pagination, setPagination] = useState<SearchPagination>({ hasMore: false, page: 1 });
+  const [hasSearched, setHasSearched] = useState(false);
 
-  const fetchData = async () => {
-    setLoading(true);
-    setError(null);
-
+  const fetchStatus = useCallback(async () => {
     try {
-      const [statusRes, marketsRes] = await Promise.all([
-        fetch("/api/bot/status"),
-        fetch("/api/markets?limit=10"),
-      ]);
-
+      const statusRes = await fetch("/api/bot/status");
       const statusData = await statusRes.json();
-      const marketsData = await marketsRes.json();
 
       if (statusData.success) {
         setStatus(statusData.data);
       } else {
         setError(statusData.error || "Failed to fetch status");
       }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to fetch status");
+    }
+  }, []);
 
-      if (marketsData.success) {
-        setMarkets(marketsData.data || []);
+  const searchMarkets = useCallback(async (query: string, page: number) => {
+    if (!query.trim()) {
+      setMarkets([]);
+      setPagination({ hasMore: false, page: 1 });
+      setHasSearched(false);
+      return;
+    }
+
+    setSearchLoading(true);
+    setError(null);
+
+    try {
+      const res = await fetch(`/api/markets/search?q=${encodeURIComponent(query)}&page=${page}&limit=20`);
+      const data = await res.json();
+
+      if (data.success) {
+        setMarkets(data.data || []);
+        setPagination(data.pagination || { hasMore: false, page });
+        setHasSearched(true);
+      } else {
+        setError(data.error || "Failed to search markets");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to fetch data");
+      setError(err instanceof Error ? err.message : "Failed to search markets");
     } finally {
-      setLoading(false);
+      setSearchLoading(false);
     }
+  }, []);
+
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    setCurrentPage(1);
+    searchMarkets(searchQuery, 1);
+  };
+
+  const handlePageChange = (newPage: number) => {
+    setCurrentPage(newPage);
+    searchMarkets(searchQuery, newPage);
   };
 
   useEffect(() => {
-    fetchData();
+    setLoading(true);
+    fetchStatus().finally(() => setLoading(false));
 
-    // Refresh every 30 seconds
-    const interval = setInterval(fetchData, 30000);
+    // Refresh status every 30 seconds
+    const interval = setInterval(fetchStatus, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchStatus]);
 
   const portfolioValue = status?.portfolio?.totalValue ?? 0;
   const cashBalance = status?.portfolio?.cashBalance ?? 0;
@@ -129,11 +167,36 @@ export default function DashboardPage() {
                 </span>
               </div>
 
-              <Button onClick={fetchData} disabled={loading} variant="outline" size="sm">
+              <Button onClick={() => fetchStatus()} disabled={loading} variant="outline" size="sm">
                 <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
               </Button>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Search Bar */}
+      <div className="bg-card border-b">
+        <div className="max-w-6xl mx-auto px-8 py-4">
+          <form onSubmit={handleSearch} className="flex gap-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                type="text"
+                placeholder="Search Polymarket markets..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+            <Button type="submit" disabled={searchLoading}>
+              {searchLoading ? (
+                <RefreshCw className="w-4 h-4 animate-spin" />
+              ) : (
+                "Search"
+              )}
+            </Button>
+          </form>
         </div>
       </div>
 
@@ -207,18 +270,30 @@ export default function DashboardPage() {
         {/* Markets List */}
         <div className="bg-card border rounded-lg">
           <div className="p-6 border-b">
-            <h2 className="font-semibold">Active Markets</h2>
+            <h2 className="font-semibold">
+              {hasSearched ? "Search Results" : "Markets"}
+            </h2>
             <p className="text-sm text-muted-foreground">
-              Top markets by activity
+              {hasSearched
+                ? `Found ${markets.length} market${markets.length !== 1 ? "s" : ""} for "${searchQuery}"`
+                : "Search for markets using the search bar above"}
             </p>
           </div>
           <div className="divide-y">
-            {markets.length === 0 && !loading && (
+            {searchLoading && (
               <div className="p-6 text-center text-muted-foreground">
-                No markets loaded
+                <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2" />
+                Searching...
               </div>
             )}
-            {markets.map((market) => (
+            {!searchLoading && markets.length === 0 && (
+              <div className="p-6 text-center text-muted-foreground">
+                {hasSearched
+                  ? "No markets found. Try a different search term."
+                  : "Enter a search term to find markets"}
+              </div>
+            )}
+            {!searchLoading && markets.map((market) => (
               <div
                 key={market.id}
                 className="p-4 hover:bg-muted/50 transition-colors"
@@ -253,6 +328,33 @@ export default function DashboardPage() {
               </div>
             ))}
           </div>
+
+          {/* Pagination Controls */}
+          {hasSearched && markets.length > 0 && (
+            <div className="p-4 border-t flex items-center justify-between">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handlePageChange(currentPage - 1)}
+                disabled={currentPage <= 1 || searchLoading}
+              >
+                <ChevronLeft className="w-4 h-4 mr-1" />
+                Previous
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                Page {currentPage}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handlePageChange(currentPage + 1)}
+                disabled={!pagination.hasMore || searchLoading}
+              >
+                Next
+                <ChevronRight className="w-4 h-4 ml-1" />
+              </Button>
+            </div>
+          )}
         </div>
 
         {/* Arbitrage Opportunities */}
