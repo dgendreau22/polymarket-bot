@@ -8,7 +8,7 @@
 import type { OrderBook, OrderBookEntry } from "./types";
 
 type OrderBookCallback = (orderBook: OrderBook) => void;
-type PriceCallback = (assetId: string, price: string) => void;
+type PriceCallback = (assetId: string, price: string, bestBid?: string, bestAsk?: string) => void;
 type ErrorCallback = (error: Error) => void;
 
 interface WebSocketConfig {
@@ -34,6 +34,7 @@ export class PolymarketWebSocket {
   private shouldReconnect = true;
   private orderBookCallbacks: Map<string, OrderBookCallback[]> = new Map();
   private priceCallbacks: Map<string, PriceCallback[]> = new Map();
+  private subscribedAssets: Set<string> = new Set();
   private onError: ErrorCallback | null = null;
 
   constructor(config: WebSocketConfig = {}) {
@@ -110,14 +111,23 @@ export class PolymarketWebSocket {
    * Subscribe to order book updates for specific assets
    */
   subscribeOrderBook(assetIds: string[], callback: OrderBookCallback): void {
+    const newAssets: string[] = [];
+
     for (const assetId of assetIds) {
       const callbacks = this.orderBookCallbacks.get(assetId) || [];
       callbacks.push(callback);
       this.orderBookCallbacks.set(assetId, callbacks);
+
+      // Track new assets that need subscription
+      if (!this.subscribedAssets.has(assetId)) {
+        newAssets.push(assetId);
+        this.subscribedAssets.add(assetId);
+      }
     }
 
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.sendSubscription(assetIds, "book");
+    // Only send subscription for new assets
+    if (this.ws?.readyState === WebSocket.OPEN && newAssets.length > 0) {
+      this.sendSubscription(newAssets, "book");
     }
   }
 
@@ -125,14 +135,23 @@ export class PolymarketWebSocket {
    * Subscribe to price updates for specific assets
    */
   subscribePrice(assetIds: string[], callback: PriceCallback): void {
+    const newAssets: string[] = [];
+
     for (const assetId of assetIds) {
       const callbacks = this.priceCallbacks.get(assetId) || [];
       callbacks.push(callback);
       this.priceCallbacks.set(assetId, callbacks);
+
+      // Track new assets that need subscription
+      if (!this.subscribedAssets.has(assetId)) {
+        newAssets.push(assetId);
+        this.subscribedAssets.add(assetId);
+      }
     }
 
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.sendSubscription(assetIds, "price");
+    // Only send subscription for new assets
+    if (this.ws?.readyState === WebSocket.OPEN && newAssets.length > 0) {
+      this.sendSubscription(newAssets, "price");
     }
   }
 
@@ -143,6 +162,7 @@ export class PolymarketWebSocket {
     for (const assetId of assetIds) {
       this.orderBookCallbacks.delete(assetId);
       this.priceCallbacks.delete(assetId);
+      this.subscribedAssets.delete(assetId);
     }
 
     if (this.ws?.readyState === WebSocket.OPEN) {
@@ -177,31 +197,55 @@ export class PolymarketWebSocket {
       return;
     }
 
-    this.ws.send(
-      JSON.stringify({
-        type: "subscribe",
-        channel: type,
-        assets_ids: assetIds,
-      })
-    );
+    // Polymarket market channel subscription format
+    // Single "market" subscription receives all events: book, price_change, last_trade_price, tick_size_change
+    const subscriptionMsg = {
+      assets_ids: assetIds,
+      type: "market",
+    };
+    console.log("[WS] Sending subscription:", subscriptionMsg);
+    this.ws.send(JSON.stringify(subscriptionMsg));
   }
 
   private handleMessage(data: string): void {
+    // Ignore non-JSON messages like PING/PONG heartbeats
+    if (!data.startsWith("{") && !data.startsWith("[")) {
+      return;
+    }
+
     try {
       const message = JSON.parse(data);
 
-      if (message.type === "book" && message.data) {
-        const orderBook = this.parseOrderBook(message);
+      // Handle array of order books (initial snapshot)
+      if (Array.isArray(message)) {
+        for (const item of message) {
+          if (item.event_type === "book" && item.bids && item.asks) {
+            const orderBook = this.parseOrderBookItem(item);
+            const callbacks = this.orderBookCallbacks.get(item.asset_id) || [];
+            for (const callback of callbacks) {
+              callback(orderBook);
+            }
+          }
+        }
+        return;
+      }
+
+      // Handle single order book update
+      if (message.event_type === "book" && message.bids && message.asks) {
+        const orderBook = this.parseOrderBookItem(message);
         const callbacks = this.orderBookCallbacks.get(message.asset_id) || [];
         for (const callback of callbacks) {
           callback(orderBook);
         }
       }
 
-      if (message.type === "price_change" && message.data) {
-        const callbacks = this.priceCallbacks.get(message.asset_id) || [];
-        for (const callback of callbacks) {
-          callback(message.asset_id, message.data.price);
+      // Handle price change events - these contain best_bid/best_ask updates
+      if (message.event_type === "price_change" && message.price_changes) {
+        for (const change of message.price_changes) {
+          const callbacks = this.priceCallbacks.get(change.asset_id) || [];
+          for (const callback of callbacks) {
+            callback(change.asset_id, change.price, change.best_bid, change.best_ask);
+          }
         }
       }
     } catch (error) {
@@ -209,27 +253,31 @@ export class PolymarketWebSocket {
     }
   }
 
-  private parseOrderBook(message: Record<string, unknown>): OrderBook {
-    const data = message.data as Record<string, unknown>;
+  private parseOrderBookItem(item: Record<string, unknown>): OrderBook {
     return {
-      market: (message.market as string) || "",
-      asset_id: message.asset_id as string,
-      bids: (data.bids as OrderBookEntry[]) || [],
-      asks: (data.asks as OrderBookEntry[]) || [],
-      timestamp: (data.timestamp as string) || new Date().toISOString(),
+      market: (item.market as string) || "",
+      asset_id: item.asset_id as string,
+      bids: (item.bids as OrderBookEntry[]) || [],
+      asks: (item.asks as OrderBookEntry[]) || [],
+      timestamp: (item.timestamp as string) || new Date().toISOString(),
     };
   }
 
   private resubscribeAll(): void {
+    // Combine all asset IDs from both callbacks (deduped)
     const bookAssets = Array.from(this.orderBookCallbacks.keys());
     const priceAssets = Array.from(this.priceCallbacks.keys());
+    const allAssets = [...new Set([...bookAssets, ...priceAssets])];
 
-    if (bookAssets.length > 0) {
-      this.sendSubscription(bookAssets, "book");
-    }
+    // Reset subscribed assets tracking (reconnection requires resubscription)
+    this.subscribedAssets.clear();
 
-    if (priceAssets.length > 0) {
-      this.sendSubscription(priceAssets, "price");
+    if (allAssets.length > 0) {
+      // Single subscription for all assets - market channel includes all event types
+      for (const assetId of allAssets) {
+        this.subscribedAssets.add(assetId);
+      }
+      this.sendSubscription(allAssets, "book"); // type param ignored, always sends "market"
     }
   }
 

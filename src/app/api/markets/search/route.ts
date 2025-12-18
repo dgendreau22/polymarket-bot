@@ -47,10 +47,22 @@ export async function GET(request: Request) {
       for (const event of searchResults.events) {
         if (event.markets && Array.isArray(event.markets)) {
           for (const market of event.markets) {
+            // Parse outcomePrices if it's a stringified JSON array
+            let outcomePrices: string[] | undefined;
+            if (typeof market.outcomePrices === "string") {
+              try {
+                outcomePrices = JSON.parse(market.outcomePrices);
+              } catch {
+                outcomePrices = undefined;
+              }
+            } else {
+              outcomePrices = market.outcomePrices;
+            }
+
             markets.push({
               id: market.id || market.conditionId,
               question: market.question || event.title,
-              outcomePrices: market.outcomePrices,
+              outcomePrices,
               volume: market.volume,
               active: market.active ?? true,
               slug: market.slug,

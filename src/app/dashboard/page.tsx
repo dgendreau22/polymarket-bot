@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RefreshCw, TrendingUp, Activity, AlertCircle, Wallet, DollarSign, Search, ChevronLeft, ChevronRight } from "lucide-react";
@@ -294,9 +295,10 @@ export default function DashboardPage() {
               </div>
             )}
             {!searchLoading && markets.map((market) => (
-              <div
+              <Link
                 key={market.id}
-                className="p-4 hover:bg-muted/50 transition-colors"
+                href={`/market/${market.id}`}
+                className="block p-4 hover:bg-muted/50 transition-colors cursor-pointer"
               >
                 <div className="flex items-start justify-between">
                   <div className="flex-1 mr-4">
@@ -325,7 +327,7 @@ export default function DashboardPage() {
                     )}
                   </div>
                 </div>
-              </div>
+              </Link>
             ))}
           </div>
 
