@@ -4,7 +4,9 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { RefreshCw, TrendingUp, Activity, AlertCircle, Wallet, DollarSign, Search, ChevronLeft, ChevronRight } from "lucide-react";
+import { BotList, BotCreateModal } from "@/components/bots";
+import { RefreshCw, AlertCircle, Wallet, DollarSign, Search, ChevronLeft, ChevronRight, Bot, Plus, TrendingUp, Briefcase } from "lucide-react";
+import type { BotInstance } from "@/lib/bots/types";
 
 interface BotStatus {
   configured: boolean;
@@ -45,9 +47,22 @@ interface SearchPagination {
   page: number;
 }
 
+interface AccountPosition {
+  asset: string;
+  conditionId: string;
+  size: string;
+  avgPrice: string;
+  currentPrice?: string;
+  pnl?: string;
+  outcome: string;
+  marketQuestion?: string;
+}
+
 export default function DashboardPage() {
   const [status, setStatus] = useState<BotStatus | null>(null);
   const [markets, setMarkets] = useState<Market[]>([]);
+  const [bots, setBots] = useState<BotInstance[]>([]);
+  const [positions, setPositions] = useState<AccountPosition[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,6 +70,7 @@ export default function DashboardPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pagination, setPagination] = useState<SearchPagination>({ hasMore: false, page: 1 });
   const [hasSearched, setHasSearched] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -68,6 +84,32 @@ export default function DashboardPage() {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch status");
+    }
+  }, []);
+
+  const fetchBots = useCallback(async () => {
+    try {
+      const botsRes = await fetch("/api/bots");
+      const botsData = await botsRes.json();
+
+      if (botsData.success) {
+        setBots(botsData.data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch bots:", err);
+    }
+  }, []);
+
+  const fetchPositions = useCallback(async () => {
+    try {
+      const posRes = await fetch("/api/positions");
+      const posData = await posRes.json();
+
+      if (posData.success && posData.data?.positions) {
+        setPositions(posData.data.positions);
+      }
+    } catch (err) {
+      console.error("Failed to fetch positions:", err);
     }
   }, []);
 
@@ -113,12 +155,18 @@ export default function DashboardPage() {
 
   useEffect(() => {
     setLoading(true);
-    fetchStatus().finally(() => setLoading(false));
+    Promise.all([fetchStatus(), fetchBots(), fetchPositions()]).finally(() => setLoading(false));
 
-    // Refresh status every 30 seconds
-    const interval = setInterval(fetchStatus, 30000);
-    return () => clearInterval(interval);
-  }, [fetchStatus]);
+    // Refresh status every 30 seconds, bots every 5 seconds, positions every 30 seconds
+    const statusInterval = setInterval(fetchStatus, 30000);
+    const botsInterval = setInterval(fetchBots, 5000);
+    const positionsInterval = setInterval(fetchPositions, 30000);
+    return () => {
+      clearInterval(statusInterval);
+      clearInterval(botsInterval);
+      clearInterval(positionsInterval);
+    };
+  }, [fetchStatus, fetchBots, fetchPositions]);
 
   const portfolioValue = status?.portfolio?.totalValue ?? 0;
   const cashBalance = status?.portfolio?.cashBalance ?? 0;
@@ -211,62 +259,115 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Status Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          {/* Configuration Status */}
-          <div className="bg-card border rounded-lg p-6">
-            <div className="flex items-center gap-3 mb-4">
-              <div
-                className={`w-3 h-3 rounded-full ${
-                  status?.configured ? "bg-green-500" : "bg-yellow-500"
-                }`}
-              />
-              <h2 className="font-semibold">Configuration</h2>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              {status?.configured
-                ? "API credentials configured"
-                : "Missing API credentials - set .env variables"}
-            </p>
-            {status?.config && (
-              <div className="mt-3 text-xs text-muted-foreground">
-                <p>Chain ID: {status.config.chainId}</p>
-                <p className="truncate">
-                  Funder: {status.config.funderAddress || "Not set"}
+        {/* Running Bots Section */}
+        <div className="bg-card border rounded-lg mb-8">
+          <div className="p-6 border-b flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Bot className="w-5 h-5 text-blue-500" />
+              <div>
+                <h2 className="font-semibold">Trading Bots</h2>
+                <p className="text-sm text-muted-foreground">
+                  {bots.filter(b => b.state === "running").length} running,{" "}
+                  {bots.filter(b => b.state === "paused").length} paused,{" "}
+                  {bots.filter(b => b.state === "stopped").length} stopped
                 </p>
+              </div>
+            </div>
+            <Button onClick={() => setShowCreateModal(true)}>
+              <Plus className="w-4 h-4 mr-2" />
+              Create Bot
+            </Button>
+          </div>
+          <div className="p-6">
+            <BotList
+              bots={bots}
+              onStateChange={fetchBots}
+              emptyMessage="No bots created yet. Click 'Create Bot' to get started."
+            />
+          </div>
+        </div>
+
+        {/* Active Positions Section */}
+        <div className="bg-card border rounded-lg mb-8">
+          <div className="p-6 border-b flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Briefcase className="w-5 h-5 text-purple-500" />
+              <div>
+                <h2 className="font-semibold">Active Positions</h2>
+                <p className="text-sm text-muted-foreground">
+                  {positions.length} position{positions.length !== 1 ? "s" : ""} on Polymarket
+                </p>
+              </div>
+            </div>
+            <Button variant="outline" size="sm" onClick={fetchPositions}>
+              <RefreshCw className="w-4 h-4" />
+            </Button>
+          </div>
+          <div className="p-6">
+            {positions.length === 0 ? (
+              <p className="text-center text-muted-foreground py-4">
+                {status?.configured
+                  ? "No active positions found"
+                  : "Connect your Polymarket account to view positions"}
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b text-left text-muted-foreground">
+                      <th className="pb-2 pr-4">Asset</th>
+                      <th className="pb-2 pr-4">Outcome</th>
+                      <th className="pb-2 pr-4 text-right">Size</th>
+                      <th className="pb-2 pr-4 text-right">Avg Price</th>
+                      <th className="pb-2 text-right">Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {positions.map((pos, idx) => {
+                      const size = parseFloat(pos.size);
+                      const avgPrice = parseFloat(pos.avgPrice);
+                      const value = size * avgPrice;
+                      return (
+                        <tr key={idx} className="border-b last:border-0">
+                          <td className="py-2 pr-4 truncate max-w-[200px]">
+                            {pos.marketQuestion || pos.asset.slice(0, 16) + '...'}
+                          </td>
+                          <td className="py-2 pr-4">
+                            <span
+                              className={`px-2 py-0.5 rounded text-xs font-medium ${
+                                pos.outcome === "YES"
+                                  ? "bg-green-500/20 text-green-500"
+                                  : "bg-red-500/20 text-red-500"
+                              }`}
+                            >
+                              {pos.outcome}
+                            </span>
+                          </td>
+                          <td className="py-2 pr-4 text-right font-mono">
+                            {size.toFixed(2)}
+                          </td>
+                          <td className="py-2 pr-4 text-right font-mono">
+                            ${avgPrice.toFixed(4)}
+                          </td>
+                          <td className="py-2 text-right font-mono">
+                            ${value.toFixed(2)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>
-
-          {/* Market Making Status */}
-          <div className="bg-card border rounded-lg p-6">
-            <div className="flex items-center gap-3 mb-4">
-              <TrendingUp className="w-5 h-5 text-blue-500" />
-              <h2 className="font-semibold">Market Making</h2>
-            </div>
-            <p className="text-2xl font-bold">
-              {status?.marketMaker.activeMarkets || 0}
-            </p>
-            <p className="text-sm text-muted-foreground">Active markets</p>
-          </div>
-
-          {/* Arbitrage Status */}
-          <div className="bg-card border rounded-lg p-6">
-            <div className="flex items-center gap-3 mb-4">
-              <Activity className="w-5 h-5 text-purple-500" />
-              <h2 className="font-semibold">Arbitrage</h2>
-            </div>
-            <p className="text-2xl font-bold">
-              {status?.arbitrage.opportunities.length || 0}
-            </p>
-            <p className="text-sm text-muted-foreground">
-              Opportunities detected
-            </p>
-            <p className="text-xs text-muted-foreground mt-1">
-              Monitoring {status?.arbitrage.monitoredMarkets || 0} markets
-            </p>
-          </div>
         </div>
+
+        {/* Bot Create Modal */}
+        <BotCreateModal
+          isOpen={showCreateModal}
+          onClose={() => setShowCreateModal(false)}
+          onCreated={fetchBots}
+        />
 
         {/* Markets List */}
         <div className="bg-card border rounded-lg">
@@ -358,37 +459,6 @@ export default function DashboardPage() {
             </div>
           )}
         </div>
-
-        {/* Arbitrage Opportunities */}
-        {status?.arbitrage.opportunities &&
-          status.arbitrage.opportunities.length > 0 && (
-            <div className="bg-card border rounded-lg mt-6">
-              <div className="p-6 border-b">
-                <h2 className="font-semibold text-purple-600">
-                  Arbitrage Opportunities
-                </h2>
-              </div>
-              <div className="divide-y">
-                {status.arbitrage.opportunities.map((opp, idx) => (
-                  <div key={idx} className="p-4">
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm">
-                        Markets: {opp.markets.join(", ")}
-                      </span>
-                      <div className="text-right">
-                        <p className="font-medium text-green-600">
-                          +${opp.expectedProfit.toFixed(2)}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Spread: {(opp.spread * 100).toFixed(2)}%
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
         {/* Footer */}
         <div className="mt-8 text-center text-sm text-muted-foreground">

@@ -1,0 +1,261 @@
+/**
+ * Bot Framework Type Definitions
+ */
+
+// ============================================================================
+// Bot Types
+// ============================================================================
+
+/** Bot execution mode */
+export type BotMode = 'live' | 'dry_run';
+
+/** Bot lifecycle state */
+export type BotState = 'running' | 'stopped' | 'paused';
+
+/** Bot configuration */
+export interface BotConfig {
+  id: string;
+  name: string;
+  strategySlug: string;
+  marketId: string;
+  marketName?: string;
+  assetId?: string;
+  mode: BotMode;
+  strategyConfig?: Record<string, unknown>;
+}
+
+/** Bot instance with runtime state */
+export interface BotInstance {
+  config: BotConfig;
+  state: BotState;
+  position: Position;
+  metrics: BotMetrics;
+  createdAt: Date;
+  updatedAt: Date;
+  startedAt?: Date;
+  stoppedAt?: Date;
+}
+
+/** Database row for bot */
+export interface BotRow {
+  id: string;
+  name: string;
+  strategy_slug: string;
+  market_id: string;
+  market_name: string | null;
+  asset_id: string | null;
+  mode: BotMode;
+  state: BotState;
+  config: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  stopped_at: string | null;
+}
+
+// ============================================================================
+// Position Types
+// ============================================================================
+
+/** Position tracking */
+export interface Position {
+  marketId: string;
+  assetId: string;
+  outcome: 'YES' | 'NO';
+  size: string;
+  avgEntryPrice: string;
+  realizedPnl: string;
+}
+
+/** Database row for position */
+export interface PositionRow {
+  id: string;
+  bot_id: string;
+  market_id: string;
+  asset_id: string;
+  outcome: 'YES' | 'NO';
+  size: string;
+  avg_entry_price: string;
+  realized_pnl: string;
+  updated_at: string;
+}
+
+// ============================================================================
+// Trade Types
+// ============================================================================
+
+/** Trade status */
+export type TradeStatus = 'pending' | 'filled' | 'cancelled' | 'failed';
+
+/** Trade record */
+export interface Trade {
+  id: string;
+  botId: string;
+  botName?: string;
+  strategySlug: string;
+  marketId: string;
+  assetId: string;
+  mode: BotMode;
+  side: 'BUY' | 'SELL';
+  outcome: 'YES' | 'NO';
+  price: string;
+  quantity: string;
+  totalValue: string;
+  fee: string;
+  pnl: string;
+  status: TradeStatus;
+  orderId?: string;
+  executedAt: Date;
+  createdAt: Date;
+}
+
+/** Database row for trade */
+export interface TradeRow {
+  id: string;
+  bot_id: string;
+  bot_name?: string;
+  strategy_slug: string;
+  market_id: string;
+  asset_id: string;
+  mode: BotMode;
+  side: 'BUY' | 'SELL';
+  outcome: 'YES' | 'NO';
+  price: string;
+  quantity: string;
+  total_value: string;
+  fee: string;
+  pnl: string;
+  status: TradeStatus;
+  order_id: string | null;
+  executed_at: string;
+  created_at: string;
+}
+
+/** Trade filters for querying */
+export interface TradeFilters {
+  botId?: string;
+  strategySlug?: string;
+  marketId?: string;
+  mode?: BotMode;
+  side?: 'BUY' | 'SELL';
+  outcome?: 'YES' | 'NO';
+  status?: TradeStatus;
+  startDate?: Date;
+  endDate?: Date;
+  limit?: number;
+  offset?: number;
+}
+
+// ============================================================================
+// Metrics Types
+// ============================================================================
+
+/** Bot performance metrics */
+export interface BotMetrics {
+  totalTrades: number;
+  winningTrades: number;
+  losingTrades: number;
+  totalPnl: string;
+  unrealizedPnl: string;
+  maxDrawdown: string;
+  avgTradeSize: string;
+}
+
+// ============================================================================
+// Strategy Types
+// ============================================================================
+
+/** Strategy parameter definition */
+export interface StrategyParameter {
+  name: string;
+  type: 'number' | 'string' | 'boolean';
+  description: string;
+  default: string | number | boolean;
+  min?: number;
+  max?: number;
+  required: boolean;
+}
+
+/** Risk management rules */
+export interface RiskManagementRules {
+  maxPositionSize: string;
+  maxDrawdown: string;
+  stopLoss?: string;
+  takeProfit?: string;
+  maxDailyLoss?: string;
+  maxOpenOrders?: number;
+}
+
+/** Strategy definition from .md file */
+export interface StrategyDefinition {
+  slug: string;
+  name: string;
+  version: string;
+  description: string;
+  algorithm: string;
+  parameters: StrategyParameter[];
+  riskManagement: RiskManagementRules;
+  author?: string;
+}
+
+/** Strategy execution context */
+export interface StrategyContext {
+  bot: BotInstance;
+  currentPrice: { yes: string; no: string };
+  position: Position;
+}
+
+/** Strategy signal output */
+export interface StrategySignal {
+  action: 'BUY' | 'SELL' | 'HOLD';
+  side: 'YES' | 'NO';
+  price: string;
+  quantity: string;
+  reason: string;
+  confidence: number;
+}
+
+/** Strategy statistics */
+export interface StrategyStats {
+  slug: string;
+  name: string;
+  totalBots: number;
+  activeBots: number;
+  totalTrades: number;
+  winRate: number;
+  totalPnl: string;
+  avgTradeSize: string;
+  maxDrawdown: string;
+  profitFactor: number;
+}
+
+// ============================================================================
+// Executor Interface
+// ============================================================================
+
+/** Strategy executor interface */
+export interface IStrategyExecutor {
+  execute(context: StrategyContext): Promise<StrategySignal | null>;
+  validate?(config: Record<string, unknown>): boolean;
+}
+
+/** Trade execution result */
+export interface TradeExecutionResult {
+  success: boolean;
+  trade?: Trade;
+  error?: string;
+  orderId?: string;
+}
+
+// ============================================================================
+// Event Types
+// ============================================================================
+
+/** Bot lifecycle events */
+export type BotEvent =
+  | { type: 'STARTED'; timestamp: Date }
+  | { type: 'STOPPED'; timestamp: Date }
+  | { type: 'PAUSED'; timestamp: Date }
+  | { type: 'RESUMED'; timestamp: Date }
+  | { type: 'TRADE_EXECUTED'; trade: Trade }
+  | { type: 'ERROR'; error: string; timestamp: Date };

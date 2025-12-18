@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { BotCreateModal } from "@/components/bots";
 import {
   ArrowLeft,
   RefreshCw,
@@ -10,6 +11,7 @@ import {
   TrendingDown,
   Calendar,
   ExternalLink,
+  Plus,
 } from "lucide-react";
 import { getWebSocket } from "@/lib/polymarket/websocket";
 import type { Market, OrderBook, OrderBookEntry } from "@/lib/polymarket/types";
@@ -60,6 +62,7 @@ export function MarketDetailClient({ initialMarket }: MarketDetailClientProps) {
   const [isConnected, setIsConnected] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastOrderBookUpdate, setLastOrderBookUpdate] = useState<number | null>(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   // Refresh market data
   const refreshMarket = useCallback(async () => {
@@ -276,6 +279,11 @@ export function MarketDetailClient({ initialMarket }: MarketDetailClientProps) {
                 <RefreshCw
                   className={cn("w-4 h-4", isRefreshing && "animate-spin")}
                 />
+              </Button>
+
+              <Button onClick={() => setShowCreateModal(true)}>
+                <Plus className="w-4 h-4 mr-2" />
+                Create Bot
               </Button>
             </div>
           </div>
@@ -607,6 +615,15 @@ export function MarketDetailClient({ initialMarket }: MarketDetailClientProps) {
           </div>
         )}
       </div>
+
+      {/* Create Bot Modal */}
+      <BotCreateModal
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        defaultMarketId={market.id}
+        defaultMarketName={market.question}
+        defaultAssetId={parseJsonArray(market.clobTokenIds)?.[0] || ""}
+      />
     </div>
   );
 }
