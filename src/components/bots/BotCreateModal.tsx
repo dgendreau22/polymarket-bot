@@ -13,7 +13,6 @@ interface BotCreateModalProps {
   onCreated?: () => void;
   defaultMarketId?: string;
   defaultMarketName?: string;
-  defaultAssetId?: string;
   defaultStrategySlug?: string;
 }
 
@@ -23,7 +22,6 @@ export function BotCreateModal({
   onCreated,
   defaultMarketId = "",
   defaultMarketName = "",
-  defaultAssetId = "",
   defaultStrategySlug = "",
 }: BotCreateModalProps) {
   const router = useRouter();
@@ -31,26 +29,23 @@ export function BotCreateModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [name, setName] = useState("");
   const [strategySlug, setStrategySlug] = useState(defaultStrategySlug);
   const [marketId, setMarketId] = useState(defaultMarketId);
   const [marketName, setMarketName] = useState(defaultMarketName);
-  const [assetId, setAssetId] = useState(defaultAssetId);
   const [mode, setMode] = useState<"live" | "dry_run">("dry_run");
-  const [interval, setInterval] = useState(5000);
+  const [strategyConfig, setStrategyConfig] = useState<Record<string, unknown>>({});
 
   // Update state when defaults change or modal opens
   useEffect(() => {
     if (isOpen) {
       setMarketId(defaultMarketId);
       setMarketName(defaultMarketName);
-      setAssetId(defaultAssetId);
       if (defaultStrategySlug) {
         setStrategySlug(defaultStrategySlug);
       }
       fetchStrategies();
     }
-  }, [isOpen, defaultMarketId, defaultMarketName, defaultAssetId, defaultStrategySlug]);
+  }, [isOpen, defaultMarketId, defaultMarketName, defaultStrategySlug]);
 
   const fetchStrategies = async () => {
     try {
@@ -68,6 +63,25 @@ export function BotCreateModal({
     }
   };
 
+  // Get the currently selected strategy
+  const selectedStrategy = strategies.find((s) => s.slug === strategySlug);
+
+  // Initialize strategyConfig with defaults when strategy changes
+  useEffect(() => {
+    if (selectedStrategy?.parameters) {
+      const defaults: Record<string, unknown> = {};
+      selectedStrategy.parameters.forEach((param) => {
+        defaults[param.name] = param.default;
+      });
+      setStrategyConfig(defaults);
+    }
+  }, [selectedStrategy]);
+
+  // Update a single parameter value
+  const updateParam = (name: string, value: unknown) => {
+    setStrategyConfig((prev) => ({ ...prev, [name]: value }));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -78,31 +92,27 @@ export function BotCreateModal({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name,
           strategySlug,
           marketId,
           marketName: marketName || undefined,
-          assetId: assetId || undefined,
           mode,
-          strategyConfig: {
-            interval,
-          },
+          strategyConfig,
         }),
       });
 
       const data = await res.json();
 
       if (data.success) {
+        const createdBotId = data.data?.config?.id;
         onCreated?.();
         onClose();
         // Reset form
-        setName("");
         setMarketId(defaultMarketId);
         setMarketName(defaultMarketName);
-        setAssetId(defaultAssetId);
         setStrategySlug(defaultStrategySlug);
-        // Navigate to the strategy page
-        router.push(`/strategies/${strategySlug}`);
+        setStrategyConfig({});
+        // Navigate to the bot's page
+        router.push(`/bots/${createdBotId}`);
       } else {
         setError(data.error || "Failed to create bot");
       }
@@ -117,7 +127,7 @@ export function BotCreateModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-card border rounded-lg p-6 w-full max-w-md mx-4">
+      <div className="bg-card border rounded-lg p-6 w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">Create New Bot</h2>
           <button
@@ -129,17 +139,6 @@ export function BotCreateModal({
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Name */}
-          <div>
-            <label className="block text-sm font-medium mb-1">Bot Name</label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="My Test Bot"
-              required
-            />
-          </div>
-
           {/* Strategy */}
           <div>
             <label className="block text-sm font-medium mb-1">Strategy</label>
@@ -165,19 +164,6 @@ export function BotCreateModal({
               onChange={(e) => setMarketId(e.target.value)}
               placeholder="0x..."
               required
-            />
-          </div>
-
-          {/* Asset ID (Optional) */}
-          <div>
-            <label className="block text-sm font-medium mb-1">
-              Asset ID (Token ID)
-              <span className="text-muted-foreground ml-1">(optional)</span>
-            </label>
-            <Input
-              value={assetId}
-              onChange={(e) => setAssetId(e.target.value)}
-              placeholder="0x..."
             />
           </div>
 
@@ -213,19 +199,63 @@ export function BotCreateModal({
             )}
           </div>
 
-          {/* Interval */}
-          <div>
-            <label className="block text-sm font-medium mb-1">
-              Execution Interval (ms)
-            </label>
-            <Input
-              type="number"
-              value={interval}
-              onChange={(e) => setInterval(parseInt(e.target.value))}
-              min={1000}
-              max={60000}
-            />
-          </div>
+          {/* Strategy Parameters */}
+          {selectedStrategy?.parameters && selectedStrategy.parameters.length > 0 && (
+            <div className="border-t pt-4">
+              <h3 className="text-sm font-medium mb-3">Strategy Parameters</h3>
+              <div className="space-y-3">
+                {selectedStrategy.parameters.map((param) => (
+                  <div key={param.name}>
+                    <label className="block text-sm font-medium mb-1">
+                      {param.name}
+                      {!param.required && (
+                        <span className="text-muted-foreground ml-1">(optional)</span>
+                      )}
+                    </label>
+                    {param.type === "boolean" ? (
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(strategyConfig[param.name])}
+                          onChange={(e) => updateParam(param.name, e.target.checked)}
+                        />
+                        <span className="text-sm text-muted-foreground">
+                          {param.description}
+                        </span>
+                      </label>
+                    ) : (
+                      <>
+                        <Input
+                          type={param.type === "number" ? "number" : "text"}
+                          value={String(strategyConfig[param.name] ?? param.default)}
+                          onChange={(e) =>
+                            updateParam(
+                              param.name,
+                              param.type === "number"
+                                ? parseFloat(e.target.value) || 0
+                                : e.target.value
+                            )
+                          }
+                          min={param.min}
+                          max={param.max}
+                          step={param.type === "number" ? "any" : undefined}
+                          required={param.required}
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {param.description}
+                          {param.min !== undefined && param.max !== undefined && (
+                            <span className="ml-1">
+                              (Range: {param.min} - {param.max})
+                            </span>
+                          )}
+                        </p>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Error */}
           {error && (

@@ -2,6 +2,8 @@
  * Bot Framework Type Definitions
  */
 
+import type { OrderBook, LastTrade, TickSize } from '../polymarket/types';
+
 // ============================================================================
 // Bot Types
 // ============================================================================
@@ -147,6 +149,53 @@ export interface TradeFilters {
 }
 
 // ============================================================================
+// Limit Order Types
+// ============================================================================
+
+/** Limit order status */
+export type LimitOrderStatus = 'open' | 'partially_filled' | 'filled' | 'cancelled';
+
+/** Limit order record */
+export interface LimitOrder {
+  id: string;
+  botId: string;
+  assetId: string;
+  side: 'BUY' | 'SELL';
+  outcome: 'YES' | 'NO';
+  price: string;
+  quantity: string;
+  filledQuantity: string;
+  status: LimitOrderStatus;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** Database row for limit order */
+export interface LimitOrderRow {
+  id: string;
+  bot_id: string;
+  asset_id: string;
+  side: 'BUY' | 'SELL';
+  outcome: 'YES' | 'NO';
+  price: string;
+  quantity: string;
+  filled_quantity: string;
+  status: LimitOrderStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Fill result from order matching */
+export interface FillResult {
+  orderId: string;
+  botId: string;
+  filledQuantity: string;
+  remainingQuantity: string;
+  fillPrice: string;
+  isFullyFilled: boolean;
+}
+
+// ============================================================================
 // Metrics Types
 // ============================================================================
 
@@ -203,6 +252,9 @@ export interface StrategyContext {
   bot: BotInstance;
   currentPrice: { yes: string; no: string };
   position: Position;
+  orderBook?: OrderBook;
+  lastTrade?: LastTrade;
+  tickSize?: TickSize;
 }
 
 /** Strategy signal output */
@@ -258,4 +310,5 @@ export type BotEvent =
   | { type: 'PAUSED'; timestamp: Date }
   | { type: 'RESUMED'; timestamp: Date }
   | { type: 'TRADE_EXECUTED'; trade: Trade }
+  | { type: 'ORDER_FILLED'; fill: FillResult; timestamp: Date }
   | { type: 'ERROR'; error: string; timestamp: Date };

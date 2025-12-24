@@ -23,7 +23,7 @@ Next.js 16 App Router application with React 19, TypeScript, Tailwind CSS v4, an
 - `types.ts` - Type definitions for markets, orders, positions, and strategy configs
 
 **`src/lib/bots/`** - Bot Testing Framework:
-- `Bot.ts` - Core bot class with state machine (running/paused/stopped), price fetching, and trade execution
+- `Bot.ts` - Core bot class with state machine (running/paused/stopped), fetches prices directly from CLOB API, WebSocket subscriptions for real-time price/order book updates, infers tick size from order book prices
 - `BotManager.ts` - Singleton orchestrating bot lifecycle, persistence, and trade execution. Uses `globalThis` for Next.js hot reload persistence
 - `DryRunExecutor.ts` - Simulates trades without real execution (for testing)
 - `LiveExecutor.ts` - Executes real trades via ClobClient
@@ -31,7 +31,7 @@ Next.js 16 App Router application with React 19, TypeScript, Tailwind CSS v4, an
 
 **`src/lib/strategies/`** - Strategy System:
 - `StrategyLoader.ts` - Parses markdown strategy files from `src/strategies/*.md` on-demand (no caching)
-- `registry.ts` - Maps strategy slugs to `IStrategyExecutor` implementations. Executors loaded once at server startup
+- `registry.ts` - Maps strategy slugs to `IStrategyExecutor` implementations. Executors use `roundToTick()` to ensure order prices match market tick size precision
 - `market-maker.ts` - MarketMaker class for bid/ask liquidity
 - `arbitrage.ts` - ArbitrageDetector for YES/NO mispricing
 
@@ -60,13 +60,15 @@ Each `.md` file contains: frontmatter (name, version, author), description, algo
 
 **Bot Management:**
 - `GET /api/bots` - List all bots (filters: `state`, `mode`, `strategy`)
-- `POST /api/bots` - Create bot (body: `name`, `strategySlug`, `marketId`, `marketName`, `assetId`, `mode`, `strategyConfig`)
+- `POST /api/bots` - Create bot (auto-fetches assetId from Gamma API if not provided)
 - `GET /api/bots/[id]` - Get bot details
 - `DELETE /api/bots/[id]` - Delete stopped bot
 - `POST /api/bots/[id]/start` - Start bot
 - `POST /api/bots/[id]/stop` - Stop bot
 - `POST /api/bots/[id]/pause` - Pause bot
 - `POST /api/bots/[id]/resume` - Resume paused bot
+- `GET /api/bots/[id]/orders` - Get pending orders for bot
+- `DELETE /api/bots/[id]/orders` - Cancel all pending orders
 
 **Strategies:**
 - `GET /api/strategies` - List all strategies with stats
@@ -86,8 +88,32 @@ Each `.md` file contains: frontmatter (name, version, author), description, algo
 ### UI Pages
 
 - `/dashboard` - Main dashboard with bot overview, active positions section
+- `/bots/[id]` - Bot detail page with real-time market data and pending orders (side-by-side layout)
 - `/strategies/[slug]` - Strategy detail page with active bots, stats, parameters, recent trades (sticky header, scrollable)
 - `/market/[id]` - Market detail with create bot button (pre-fills market)
+
+### Bot Detail Page Features (`/bots/[id]`)
+
+**Market Data Panel:**
+- Best bid/ask prices with spread calculation
+- Last trade price with side indicator (BUY/SELL)
+- Live order book (top 10 levels) with pending order highlighting
+- WebSocket connection status indicator
+
+**Order Book Highlighting:**
+- Pending BUY orders highlight only the bid side cells (left columns)
+- Pending SELL orders highlight only the ask side cells (right columns)
+- Blue CircleDot indicator shows which price levels have pending orders
+
+**Pending Orders Panel:**
+- Lists all active limit orders with side, outcome, price, quantity, fill status
+- Cancel All button to remove all pending orders
+- Prices formatted to match market tick size precision
+
+**Price Precision:**
+- Tick size inferred from order book prices when `tick_size_change` events aren't available
+- All prices (order book, pending orders, signals) formatted to match market precision
+- `formatPrice()` helper uses tick size to determine decimal places
 
 ### Components
 

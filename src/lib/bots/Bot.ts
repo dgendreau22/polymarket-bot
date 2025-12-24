@@ -16,9 +16,18 @@ import type {
   StrategySignal,
   Trade,
   BotEvent,
+  LimitOrder,
+  FillResult,
 } from './types';
+import type { OrderBook, LastTrade, TickSize } from '../polymarket/types';
 import { getExecutor } from '../strategies/registry';
 import { getWebSocket } from '../polymarket/websocket';
+import { processTradeForBotFills } from './LimitOrderMatcher';
+import {
+  getOpenOrdersByBotId,
+  cancelAllBotOrders,
+  rowToLimitOrder,
+} from '../persistence/LimitOrderRepository';
 
 export type BotEventHandler = (event: BotEvent) => void;
 
@@ -35,6 +44,9 @@ export class Bot {
   private intervalId?: NodeJS.Timeout;
   private eventHandlers: BotEventHandler[] = [];
   private currentPrice: { yes: string; no: string } = { yes: '0.5', no: '0.5' };
+  private currentOrderBook: OrderBook | null = null;
+  private currentLastTrade: LastTrade | null = null;
+  private currentTickSize: TickSize | null = null;
 
   // Executor for trade execution (set by BotManager)
   private tradeExecutor?: (bot: Bot, signal: StrategySignal) => Promise<Trade | null>;
@@ -138,7 +150,7 @@ export class Bot {
     // Fetch initial price from API before starting
     await this.fetchInitialPrice();
 
-    // Subscribe to price updates if we have an asset ID
+    // Subscribe to order book updates if we have an asset ID
     if (this.config.assetId) {
       const ws = getWebSocket();
       if (!ws.isConnected()) {
@@ -149,28 +161,70 @@ export class Bot {
         }
       }
 
-      ws.subscribePrice([this.config.assetId], (assetId, price) => {
-        if (assetId === this.config.assetId) {
-          this.currentPrice.yes = price;
-          this.currentPrice.no = (1 - parseFloat(price)).toFixed(4);
-          console.log(`[Bot ${this.id}] Price updated via WebSocket: YES=${price}`);
+      // Subscribe to order book for real-time updates
+      ws.subscribeOrderBook([this.config.assetId], (orderBook) => {
+        if (this.state !== 'running') return;
+
+        this.currentOrderBook = orderBook;
+        this.updatePricesFromOrderBook(orderBook);
+
+        // Trigger execution on order book update
+        this.executeCycle().catch(err => {
+          console.error(`[Bot ${this.id}] Execution cycle error:`, err);
+          this.emitEvent({ type: 'ERROR', error: err.message, timestamp: new Date() });
+        });
+      });
+
+      // Subscribe to price changes for real-time price updates (more frequent than order book)
+      ws.subscribePrice([this.config.assetId], (_assetId, _price, bestBid, bestAsk) => {
+        if (this.state !== 'running') return;
+
+        if (bestBid && bestAsk) {
+          const bid = parseFloat(bestBid);
+          const ask = parseFloat(bestAsk);
+          const midPrice = (bid + ask) / 2;
+          this.currentPrice.yes = midPrice.toFixed(4);
+          this.currentPrice.no = (1 - midPrice).toFixed(4);
+          console.log(`[Bot ${this.id}] Price update: YES=${this.currentPrice.yes} (bid=${bestBid}, ask=${bestAsk})`);
         }
+      });
+
+      // Subscribe to last trade updates
+      ws.subscribeTrades([this.config.assetId], (trade) => {
+        if (this.state !== 'running') return;
+        this.currentLastTrade = trade;
+        console.log(`[Bot ${this.id}] Last trade: ${trade.side} ${trade.size} @ ${trade.price}`);
+
+        // Process trade for potential order fills (dry-run mode)
+        if (this.config.mode === 'dry_run') {
+          const fills = processTradeForBotFills(this.id, trade);
+          for (const fill of fills) {
+            this.handleOrderFilled(fill);
+          }
+        }
+      });
+
+      // Subscribe to tick size updates
+      ws.subscribeTickSize([this.config.assetId], (tickSize) => {
+        if (this.state !== 'running') return;
+        this.currentTickSize = tickSize;
+        console.log(`[Bot ${this.id}] Tick size updated: ${tickSize.tick_size}`);
       });
     }
 
-    // Get execution interval from config
-    const interval = (this.config.strategyConfig?.interval as number) || 5000;
-
-    // Start execution loop
+    // Fallback interval for cases where WebSocket updates are slow/missing
+    const fallbackInterval = 30000; // 30 seconds
     this.intervalId = setInterval(() => {
-      this.executeCycle().catch(err => {
-        console.error(`[Bot ${this.id}] Execution cycle error:`, err);
-        this.emitEvent({ type: 'ERROR', error: err.message, timestamp: new Date() });
-      });
-    }, interval);
+      if (this.state === 'running') {
+        this.executeCycle().catch(err => {
+          console.error(`[Bot ${this.id}] Fallback execution cycle error:`, err);
+          this.emitEvent({ type: 'ERROR', error: err.message, timestamp: new Date() });
+        });
+      }
+    }, fallbackInterval);
 
     this.emitEvent({ type: 'STARTED', timestamp: new Date() });
-    console.log(`[Bot ${this.id}] Started with ${interval}ms interval, initial price: YES=${this.currentPrice.yes}`);
+    console.log(`[Bot ${this.id}] Started with real-time order book updates, initial price: YES=${this.currentPrice.yes}`);
   }
 
   /**
@@ -184,14 +238,29 @@ export class Bot {
     }
 
     try {
-      // Use dynamic import to avoid server-side issues
-      const response = await fetch(`http://localhost:3000/api/orderbook?token_id=${encodeURIComponent(assetId)}`);
-      const data = await response.json();
+      // Fetch directly from CLOB API to avoid port mismatch issues
+      const CLOB_HOST = process.env.POLYMARKET_CLOB_HOST || 'https://clob.polymarket.com';
+      const response = await fetch(`${CLOB_HOST}/book?token_id=${encodeURIComponent(assetId)}`);
+      const orderBook = await response.json();
 
-      if (data.success && data.data) {
-        // Get best bid/ask from order book
-        const bids = data.data.bids || [];
-        const asks = data.data.asks || [];
+      if (orderBook) {
+        // Get best bid/ask from order book (CLOB API returns bids/asks directly)
+        const bids = orderBook.bids || [];
+        const asks = orderBook.asks || [];
+
+        // Infer tick size from order book prices
+        if (!this.currentTickSize && (bids.length > 0 || asks.length > 0)) {
+          const samplePrice = bids[0]?.price || asks[0]?.price;
+          if (samplePrice) {
+            const inferredTick = this.inferTickSize(samplePrice);
+            this.currentTickSize = {
+              asset_id: this.config.assetId || '',
+              tick_size: inferredTick,
+              timestamp: new Date().toISOString(),
+            };
+            console.log(`[Bot ${this.id}] Inferred tick size: ${inferredTick} from price ${samplePrice}`);
+          }
+        }
 
         if (bids.length > 0 && asks.length > 0) {
           // Sort to get best prices
@@ -231,6 +300,55 @@ export class Bot {
   }
 
   /**
+   * Infer tick size from price string (e.g., "0.01" -> 0.01, "0.001" -> 0.001)
+   */
+  private inferTickSize(price: string): string {
+    const parts = price.split('.');
+    if (parts.length < 2) return '1';
+    const decimals = parts[1].length;
+    return (1 / Math.pow(10, decimals)).toString();
+  }
+
+  /**
+   * Update prices from order book data
+   */
+  private updatePricesFromOrderBook(orderBook: OrderBook): void {
+    const bids = orderBook.bids || [];
+    const asks = orderBook.asks || [];
+
+    // Infer tick size from order book prices if not already set
+    if (!this.currentTickSize && (bids.length > 0 || asks.length > 0)) {
+      const samplePrice = bids[0]?.price || asks[0]?.price;
+      if (samplePrice) {
+        const inferredTick = this.inferTickSize(samplePrice);
+        this.currentTickSize = {
+          asset_id: this.config.assetId || '',
+          tick_size: inferredTick,
+          timestamp: new Date().toISOString(),
+        };
+        console.log(`[Bot ${this.id}] Inferred tick size: ${inferredTick} from price ${samplePrice}`);
+      }
+    }
+
+    if (bids.length > 0 && asks.length > 0) {
+      const bestBid = parseFloat(bids[0].price);
+      const bestAsk = parseFloat(asks[0].price);
+      const midPrice = (bestBid + bestAsk) / 2;
+
+      this.currentPrice.yes = midPrice.toFixed(4);
+      this.currentPrice.no = (1 - midPrice).toFixed(4);
+    } else if (bids.length > 0) {
+      const bestBid = parseFloat(bids[0].price);
+      this.currentPrice.yes = bestBid.toFixed(4);
+      this.currentPrice.no = (1 - bestBid).toFixed(4);
+    } else if (asks.length > 0) {
+      const bestAsk = parseFloat(asks[0].price);
+      this.currentPrice.yes = bestAsk.toFixed(4);
+      this.currentPrice.no = (1 - bestAsk).toFixed(4);
+    }
+  }
+
+  /**
    * Stop the bot
    */
   async stop(): Promise<void> {
@@ -251,6 +369,12 @@ export class Bot {
     if (this.config.assetId) {
       const ws = getWebSocket();
       ws.unsubscribe([this.config.assetId]);
+    }
+
+    // Cancel all pending orders
+    const cancelledCount = cancelAllBotOrders(this.id);
+    if (cancelledCount > 0) {
+      console.log(`[Bot ${this.id}] Cancelled ${cancelledCount} pending orders`);
     }
 
     this.state = 'stopped';
@@ -337,6 +461,9 @@ export class Bot {
       bot: this.toInstance(),
       currentPrice: this.currentPrice,
       position: this.position,
+      orderBook: this.currentOrderBook || undefined,
+      lastTrade: this.currentLastTrade || undefined,
+      tickSize: this.currentTickSize || undefined,
     };
 
     // Execute strategy
@@ -349,7 +476,11 @@ export class Bot {
       if (this.tradeExecutor) {
         const trade = await this.tradeExecutor(this, signal);
         if (trade) {
-          this.updatePositionFromTrade(trade);
+          // Only update position immediately for filled trades (live mode)
+          // For pending trades (dry-run mode), position is updated when order fills via handleOrderFilled
+          if (trade.status === 'filled') {
+            this.updatePositionFromTrade(trade);
+          }
           this.emitEvent({ type: 'TRADE_EXECUTED', trade });
         }
       }
@@ -364,12 +495,14 @@ export class Bot {
     if (!assetId) return;
 
     try {
-      const response = await fetch(`http://localhost:3000/api/orderbook?token_id=${encodeURIComponent(assetId)}`);
-      const data = await response.json();
+      // Fetch directly from CLOB API to avoid port mismatch issues
+      const CLOB_HOST = process.env.POLYMARKET_CLOB_HOST || 'https://clob.polymarket.com';
+      const response = await fetch(`${CLOB_HOST}/book?token_id=${encodeURIComponent(assetId)}`);
+      const orderBook = await response.json();
 
-      if (data.success && data.data) {
-        const bids = data.data.bids || [];
-        const asks = data.data.asks || [];
+      if (orderBook) {
+        const bids = orderBook.bids || [];
+        const asks = orderBook.asks || [];
 
         if (bids.length > 0 && asks.length > 0) {
           const sortedBids = [...bids].sort(
@@ -472,6 +605,90 @@ export class Bot {
    */
   updatePrice(yes: string, no: string): void {
     this.currentPrice = { yes, no };
+  }
+
+  // ============================================================================
+  // Order Management
+  // ============================================================================
+
+  /**
+   * Get active (open/partially filled) limit orders for this bot
+   */
+  getActiveOrders(): LimitOrder[] {
+    const orderRows = getOpenOrdersByBotId(this.id);
+    return orderRows.map(rowToLimitOrder);
+  }
+
+  /**
+   * Handle an order fill
+   * Updates position based on the filled order
+   */
+  handleOrderFilled(fill: FillResult): void {
+    const orders = getOpenOrdersByBotId(this.id);
+    const orderRow = orders.find(o => o.id === fill.orderId);
+
+    if (!orderRow) {
+      console.warn(`[Bot ${this.id}] Order ${fill.orderId} not found for fill`);
+      return;
+    }
+
+    const fillQty = parseFloat(fill.filledQuantity);
+    const fillPrice = parseFloat(fill.fillPrice);
+    const currentSize = parseFloat(this.position.size);
+
+    if (orderRow.side === 'BUY') {
+      // Buying increases position
+      const newSize = currentSize + fillQty;
+      const currentAvg = parseFloat(this.position.avgEntryPrice);
+      const newAvg = currentSize === 0
+        ? fillPrice
+        : (currentAvg * currentSize + fillPrice * fillQty) / newSize;
+
+      this.position.size = newSize.toString();
+      this.position.avgEntryPrice = newAvg.toFixed(6);
+      this.position.outcome = orderRow.outcome;
+
+      console.log(
+        `[Bot ${this.id}] Position updated (BUY fill): size=${newSize.toFixed(4)}, avgPrice=${newAvg.toFixed(4)}`
+      );
+    } else {
+      // Selling decreases position
+      const newSize = currentSize - fillQty;
+
+      // Calculate realized PnL
+      const avgEntry = parseFloat(this.position.avgEntryPrice);
+      const pnl = (fillPrice - avgEntry) * fillQty;
+      const currentPnl = parseFloat(this.position.realizedPnl);
+
+      this.position.size = Math.max(0, newSize).toString();
+      this.position.realizedPnl = (currentPnl + pnl).toFixed(6);
+
+      // Reset avg entry price if position closed
+      if (newSize <= 0) {
+        this.position.avgEntryPrice = '0';
+      }
+
+      console.log(
+        `[Bot ${this.id}] Position updated (SELL fill): size=${Math.max(0, newSize).toFixed(4)}, pnl=${pnl.toFixed(4)}`
+      );
+
+      // Update metrics
+      if (pnl > 0) {
+        this.metrics.winningTrades++;
+      } else if (pnl < 0) {
+        this.metrics.losingTrades++;
+      }
+    }
+
+    // Update metrics
+    if (fill.isFullyFilled) {
+      this.metrics.totalTrades++;
+    }
+    this.metrics.totalPnl = this.position.realizedPnl;
+    this.updatedAt = new Date();
+
+    // Emit event so BotManager can persist the updated position
+    this.emitEvent({ type: 'ORDER_FILLED', fill, timestamp: new Date() });
   }
 
   // ============================================================================

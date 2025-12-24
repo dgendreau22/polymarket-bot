@@ -14,6 +14,7 @@ import type {
   BotMode,
   Trade,
   StrategySignal,
+  LimitOrder,
 } from './types';
 import {
   createBot as createBotRecord,
@@ -31,6 +32,11 @@ import {
   getBotTradeStats,
   rowToTrade,
 } from '../persistence/TradeRepository';
+import {
+  getOpenOrdersByBotId,
+  cancelAllBotOrders,
+  rowToLimitOrder,
+} from '../persistence/LimitOrderRepository';
 
 class BotManager {
   private bots: Map<string, Bot> = new Map();
@@ -55,6 +61,11 @@ class BotManager {
 
         // Restore state (but mark as stopped - don't auto-start)
         bot.setState('stopped');
+
+        // Sync database state to 'stopped' if it wasn't already
+        if (record.state !== 'stopped') {
+          updateBotState(record.id, 'stopped');
+        }
 
         // Restore position if exists
         const positionRecord = getOrCreatePosition(
@@ -109,16 +120,32 @@ class BotManager {
         // Persist trade
         createTrade(trade);
 
-        // Update position in database
-        const position = b.getPosition();
-        updatePosition(b.id, {
+        // Only persist position immediately for filled trades (live mode)
+        // For pending trades (dry-run mode), position is persisted when order fills
+        if (trade.status === 'filled') {
+          const position = b.getPosition();
+          updatePosition(b.id, {
+            size: position.size,
+            avgEntryPrice: position.avgEntryPrice,
+            realizedPnl: position.realizedPnl,
+          });
+        }
+      }
+
+      return trade;
+    });
+
+    // Set up callback for when orders fill (dry-run mode)
+    bot.onEvent((event) => {
+      if (event.type === 'ORDER_FILLED') {
+        // Persist updated position when order fills
+        const position = bot.getPosition();
+        updatePosition(bot.id, {
           size: position.size,
           avgEntryPrice: position.avgEntryPrice,
           realizedPnl: position.realizedPnl,
         });
       }
-
-      return trade;
     });
   }
 
@@ -326,6 +353,33 @@ class BotManager {
     }
 
     return { running, paused, stopped };
+  }
+
+  // ============================================================================
+  // Order Management
+  // ============================================================================
+
+  /**
+   * Get active orders for a bot
+   */
+  getActiveOrders(botId: string): LimitOrder[] {
+    const bot = this.bots.get(botId);
+    if (bot) {
+      return bot.getActiveOrders();
+    }
+
+    // Fallback to database query if bot not in memory
+    const orderRows = getOpenOrdersByBotId(botId);
+    return orderRows.map(rowToLimitOrder);
+  }
+
+  /**
+   * Cancel all orders for a bot
+   */
+  cancelBotOrders(botId: string): number {
+    const cancelledCount = cancelAllBotOrders(botId);
+    console.log(`[BotManager] Cancelled ${cancelledCount} orders for bot: ${botId}`);
+    return cancelledCount;
   }
 }
 

@@ -5,10 +5,12 @@
  * Essential for market making and arbitrage strategies.
  */
 
-import type { OrderBook, OrderBookEntry } from "./types";
+import type { OrderBook, OrderBookEntry, LastTrade, TickSize } from "./types";
 
 type OrderBookCallback = (orderBook: OrderBook) => void;
 type PriceCallback = (assetId: string, price: string, bestBid?: string, bestAsk?: string) => void;
+type TradeCallback = (trade: LastTrade) => void;
+type TickSizeCallback = (tickSize: TickSize) => void;
 type ErrorCallback = (error: Error) => void;
 
 interface WebSocketConfig {
@@ -34,6 +36,8 @@ export class PolymarketWebSocket {
   private shouldReconnect = true;
   private orderBookCallbacks: Map<string, OrderBookCallback[]> = new Map();
   private priceCallbacks: Map<string, PriceCallback[]> = new Map();
+  private tradeCallbacks: Map<string, TradeCallback[]> = new Map();
+  private tickSizeCallbacks: Map<string, TickSizeCallback[]> = new Map();
   private subscribedAssets: Set<string> = new Set();
   private onError: ErrorCallback | null = null;
 
@@ -156,12 +160,64 @@ export class PolymarketWebSocket {
   }
 
   /**
-   * Unsubscribe from asset updates
+   * Subscribe to trade updates for specific assets
+   */
+  subscribeTrades(assetIds: string[], callback: TradeCallback): void {
+    const newAssets: string[] = [];
+
+    for (const assetId of assetIds) {
+      const callbacks = this.tradeCallbacks.get(assetId) || [];
+      callbacks.push(callback);
+      this.tradeCallbacks.set(assetId, callbacks);
+      console.log(`[WS] subscribeTrades: ${assetId.slice(0, 8)}... now has ${callbacks.length} callbacks`);
+
+      // Track new assets that need subscription
+      if (!this.subscribedAssets.has(assetId)) {
+        newAssets.push(assetId);
+        this.subscribedAssets.add(assetId);
+      }
+    }
+
+    // Only send subscription for new assets
+    if (this.ws?.readyState === WebSocket.OPEN && newAssets.length > 0) {
+      this.sendSubscription(newAssets, "book");
+    }
+  }
+
+  /**
+   * Subscribe to tick size updates for specific assets
+   */
+  subscribeTickSize(assetIds: string[], callback: TickSizeCallback): void {
+    const newAssets: string[] = [];
+
+    for (const assetId of assetIds) {
+      const callbacks = this.tickSizeCallbacks.get(assetId) || [];
+      callbacks.push(callback);
+      this.tickSizeCallbacks.set(assetId, callbacks);
+
+      // Track new assets that need subscription
+      if (!this.subscribedAssets.has(assetId)) {
+        newAssets.push(assetId);
+        this.subscribedAssets.add(assetId);
+      }
+    }
+
+    // Only send subscription for new assets
+    if (this.ws?.readyState === WebSocket.OPEN && newAssets.length > 0) {
+      this.sendSubscription(newAssets, "book");
+    }
+  }
+
+  /**
+   * Unsubscribe from asset updates (removes all callbacks for these assets)
+   * WARNING: Only use this when stopping a bot - it removes ALL callbacks
    */
   unsubscribe(assetIds: string[]): void {
     for (const assetId of assetIds) {
       this.orderBookCallbacks.delete(assetId);
       this.priceCallbacks.delete(assetId);
+      this.tradeCallbacks.delete(assetId);
+      this.tickSizeCallbacks.delete(assetId);
       this.subscribedAssets.delete(assetId);
     }
 
@@ -172,6 +228,32 @@ export class PolymarketWebSocket {
           assets_ids: assetIds,
         })
       );
+    }
+  }
+
+  /**
+   * Remove a specific order book callback (safe for UI cleanup)
+   */
+  removeOrderBookCallback(assetId: string, callback: OrderBookCallback): void {
+    const callbacks = this.orderBookCallbacks.get(assetId);
+    if (callbacks) {
+      const index = callbacks.indexOf(callback);
+      if (index !== -1) {
+        callbacks.splice(index, 1);
+      }
+    }
+  }
+
+  /**
+   * Remove a specific trade callback (safe for UI cleanup)
+   */
+  removeTradeCallback(assetId: string, callback: TradeCallback): void {
+    const callbacks = this.tradeCallbacks.get(assetId);
+    if (callbacks) {
+      const index = callbacks.indexOf(callback);
+      if (index !== -1) {
+        callbacks.splice(index, 1);
+      }
     }
   }
 
@@ -216,6 +298,11 @@ export class PolymarketWebSocket {
     try {
       const message = JSON.parse(data);
 
+      // Log all event types for debugging
+      if (message.event_type) {
+        console.log(`[WS] Event: ${message.event_type}`, message.asset_id ? `asset: ${message.asset_id.slice(0, 8)}...` : "");
+      }
+
       // Handle array of order books (initial snapshot)
       if (Array.isArray(message)) {
         for (const item of message) {
@@ -248,6 +335,37 @@ export class PolymarketWebSocket {
           }
         }
       }
+
+      // Handle last trade price events
+      if (message.event_type === "last_trade_price") {
+        const assetId = message.asset_id as string;
+        const trade: LastTrade = {
+          asset_id: assetId,
+          price: message.price as string,
+          size: message.size as string || "0",
+          side: (message.side as "BUY" | "SELL") || "BUY",
+          timestamp: (message.timestamp as string) || new Date().toISOString(),
+        };
+        const callbacks = this.tradeCallbacks.get(assetId) || [];
+        console.log(`[WS] last_trade_price: ${trade.price} (${callbacks.length} callbacks)`);
+        for (const callback of callbacks) {
+          callback(trade);
+        }
+      }
+
+      // Handle tick size change events
+      if (message.event_type === "tick_size_change") {
+        const assetId = message.asset_id as string;
+        const tickSize: TickSize = {
+          asset_id: assetId,
+          tick_size: message.tick_size as string,
+          timestamp: (message.timestamp as string) || new Date().toISOString(),
+        };
+        const callbacks = this.tickSizeCallbacks.get(assetId) || [];
+        for (const callback of callbacks) {
+          callback(tickSize);
+        }
+      }
     } catch (error) {
       console.error("[WS] Failed to parse message:", error);
     }
@@ -264,10 +382,12 @@ export class PolymarketWebSocket {
   }
 
   private resubscribeAll(): void {
-    // Combine all asset IDs from both callbacks (deduped)
+    // Combine all asset IDs from all callbacks (deduped)
     const bookAssets = Array.from(this.orderBookCallbacks.keys());
     const priceAssets = Array.from(this.priceCallbacks.keys());
-    const allAssets = [...new Set([...bookAssets, ...priceAssets])];
+    const tradeAssets = Array.from(this.tradeCallbacks.keys());
+    const tickSizeAssets = Array.from(this.tickSizeCallbacks.keys());
+    const allAssets = [...new Set([...bookAssets, ...priceAssets, ...tradeAssets, ...tickSizeAssets])];
 
     // Reset subscribed assets tracking (reconnection requires resubscription)
     this.subscribedAssets.clear();

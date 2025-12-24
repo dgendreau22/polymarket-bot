@@ -6,12 +6,15 @@ interface PageProps {
 }
 
 async function getMarket(id: string) {
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
-
   try {
-    const response = await fetch(`${baseUrl}/api/markets/${id}`, {
-      next: { revalidate: 30 },
-    });
+    // Fetch directly from Gamma API to avoid port mismatch issues
+    const response = await fetch(
+      `https://gamma-api.polymarket.com/markets/${id}`,
+      {
+        headers: { "Content-Type": "application/json" },
+        next: { revalidate: 30 },
+      }
+    );
 
     if (!response.ok) {
       if (response.status === 404) {
@@ -20,8 +23,7 @@ async function getMarket(id: string) {
       throw new Error("Failed to fetch market");
     }
 
-    const data = await response.json();
-    return data.success ? data.data : null;
+    return await response.json();
   } catch (error) {
     console.error("[Market Page] Error fetching market:", error);
     return null;

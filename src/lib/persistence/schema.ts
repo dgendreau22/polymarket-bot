@@ -66,6 +66,23 @@ export function initializeSchema(db: Database.Database): void {
     )
   `);
 
+  // Limit orders table: tracks active limit orders for bots
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS limit_orders (
+      id TEXT PRIMARY KEY,
+      bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+      asset_id TEXT NOT NULL,
+      side TEXT NOT NULL CHECK(side IN ('BUY', 'SELL')),
+      outcome TEXT NOT NULL CHECK(outcome IN ('YES', 'NO')),
+      price TEXT NOT NULL,
+      quantity TEXT NOT NULL,
+      filled_quantity TEXT NOT NULL DEFAULT '0',
+      status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'partially_filled', 'filled', 'cancelled')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
   // Create indexes for performance
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_trades_bot_id ON trades(bot_id);
@@ -74,6 +91,10 @@ export function initializeSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_trades_market_id ON trades(market_id);
     CREATE INDEX IF NOT EXISTS idx_bots_state ON bots(state);
     CREATE INDEX IF NOT EXISTS idx_bots_strategy ON bots(strategy_slug);
+    CREATE INDEX IF NOT EXISTS idx_limit_orders_bot_id ON limit_orders(bot_id);
+    CREATE INDEX IF NOT EXISTS idx_limit_orders_asset_id ON limit_orders(asset_id);
+    CREATE INDEX IF NOT EXISTS idx_limit_orders_status ON limit_orders(status);
+    CREATE INDEX IF NOT EXISTS idx_limit_orders_price ON limit_orders(price);
   `);
 
   // Migration: Add market_name column to bots table if it doesn't exist
@@ -92,6 +113,7 @@ export function initializeSchema(db: Database.Database): void {
  */
 export function dropAllTables(db: Database.Database): void {
   db.exec(`
+    DROP TABLE IF EXISTS limit_orders;
     DROP TABLE IF EXISTS positions;
     DROP TABLE IF EXISTS trades;
     DROP TABLE IF EXISTS bots;

@@ -154,6 +154,20 @@ export interface OrderBookEntry {
   size: string;
 }
 
+export interface LastTrade {
+  asset_id: string;
+  price: string;
+  size: string;
+  side: "BUY" | "SELL";
+  timestamp: string;
+}
+
+export interface TickSize {
+  asset_id: string;
+  tick_size: string;
+  timestamp: string;
+}
+
 export interface Order {
   id: string;
   market: string;

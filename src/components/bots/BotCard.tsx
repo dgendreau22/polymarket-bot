@@ -13,14 +13,23 @@ interface BotCardProps {
   onStateChange?: () => void;
 }
 
+// Format strategy slug to display name (e.g., "test-oscillator" -> "Test Oscillator")
+function formatStrategyName(slug: string): string {
+  return slug
+    .split("-")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 export function BotCard({ bot, onStateChange }: BotCardProps) {
   const [deleting, setDeleting] = useState(false);
   const pnl = parseFloat(bot.metrics.totalPnl);
   const positionSize = parseFloat(bot.position.size);
   const avgPrice = parseFloat(bot.position.avgEntryPrice);
+  const strategyName = formatStrategyName(bot.config.strategySlug);
 
   const handleDelete = async () => {
-    if (!confirm(`Are you sure you want to delete "${bot.config.name}"? This will also delete all associated trades.`)) {
+    if (!confirm(`Are you sure you want to delete this ${strategyName} bot? This will also delete all associated trades.`)) {
       return;
     }
 
@@ -48,12 +57,11 @@ export function BotCard({ bot, onStateChange }: BotCardProps) {
       {/* Header */}
       <div className="flex items-start justify-between mb-3">
         <div>
-          <h3 className="font-semibold truncate">{bot.config.name}</h3>
           <Link
-            href={`/strategies/${bot.config.strategySlug}`}
-            className="text-xs text-muted-foreground hover:text-primary"
+            href={`/bots/${bot.config.id}`}
+            className="font-semibold truncate hover:text-primary"
           >
-            {bot.config.strategySlug}
+            {strategyName}
           </Link>
         </div>
         <BotStatusBadge state={bot.state} mode={bot.config.mode} />

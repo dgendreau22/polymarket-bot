@@ -111,41 +111,54 @@ export class TestOscillatorExecutor implements IStrategyExecutor {
  * Full implementation in market-maker.ts
  */
 export class MarketMakerExecutor implements IStrategyExecutor {
+  // Round price to tick size
+  private roundToTick(price: number, tickSize: number): string {
+    const rounded = Math.round(price / tickSize) * tickSize;
+    // Calculate decimal places from tick size
+    const decimals = tickSize >= 1 ? 0 : Math.max(0, Math.ceil(-Math.log10(tickSize)));
+    return rounded.toFixed(decimals);
+  }
+
   async execute(context: StrategyContext): Promise<StrategySignal | null> {
     // This is a simplified version - the full implementation is in market-maker.ts
-    const { position, currentPrice, bot } = context;
+    const { position, currentPrice, bot, tickSize } = context;
     const config = (bot.config.strategyConfig || {}) as Record<string, unknown>;
 
     const spread = (config.spread as number) || 0.02;
     const orderSize = String(config.orderSize || '10');
     const maxPosition = parseFloat(String(config.maxPosition || '100'));
+    const outcome = (config.outcome as 'YES' | 'NO') || 'YES';
 
-    const midPrice = (parseFloat(currentPrice.yes) + parseFloat(currentPrice.no)) / 2;
+    // Get tick size (default to 0.01 if not available)
+    const tick = tickSize ? parseFloat(tickSize.tick_size) : 0.01;
+
+    // Use the actual current price of the outcome being traded
+    const basePrice = outcome === 'YES' ? parseFloat(currentPrice.yes) : parseFloat(currentPrice.no);
     const positionSize = parseFloat(position.size);
 
     // Simple position-based signal
     if (positionSize === 0) {
-      // Place bid
-      const bidPrice = (midPrice * (1 - spread / 2)).toFixed(4);
+      // Place bid slightly below current price, rounded to tick
+      const bidPrice = this.roundToTick(basePrice * (1 - spread / 2), tick);
       return {
         action: 'BUY',
-        side: 'YES',
+        side: outcome,
         price: bidPrice,
         quantity: orderSize,
-        reason: 'Market making - providing bid liquidity',
+        reason: `Market making - providing bid liquidity @ ${bidPrice}`,
         confidence: 0.8,
       };
     }
 
     if (positionSize > 0 && positionSize < maxPosition) {
-      // Place ask to close position
-      const askPrice = (midPrice * (1 + spread / 2)).toFixed(4);
+      // Place ask slightly above current price, rounded to tick
+      const askPrice = this.roundToTick(basePrice * (1 + spread / 2), tick);
       return {
         action: 'SELL',
-        side: 'YES',
+        side: outcome,
         price: askPrice,
         quantity: orderSize,
-        reason: 'Market making - providing ask liquidity',
+        reason: `Market making - providing ask liquidity @ ${askPrice}`,
         confidence: 0.8,
       };
     }

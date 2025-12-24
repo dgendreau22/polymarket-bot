@@ -622,7 +622,6 @@ export function MarketDetailClient({ initialMarket }: MarketDetailClientProps) {
         onClose={() => setShowCreateModal(false)}
         defaultMarketId={market.id}
         defaultMarketName={market.question}
-        defaultAssetId={parseJsonArray(market.clobTokenIds)?.[0] || ""}
       />
     </div>
   );
