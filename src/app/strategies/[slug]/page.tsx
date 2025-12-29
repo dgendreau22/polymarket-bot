@@ -154,7 +154,7 @@ export default function StrategyDetailPage() {
               <span className="text-xs text-muted-foreground">Total PnL</span>
             </div>
             <p className={`text-2xl font-bold ${totalPnl >= 0 ? "text-green-500" : "text-red-500"}`}>
-              ${totalPnl.toFixed(4)}
+              ${totalPnl.toFixed(2)}
             </p>
           </div>
 

@@ -23,11 +23,12 @@ Next.js 16 App Router application with React 19, TypeScript, Tailwind CSS v4, an
 - `types.ts` - Type definitions for markets, orders, positions, and strategy configs
 
 **`src/lib/bots/`** - Bot Testing Framework:
-- `Bot.ts` - Core bot class with state machine (running/paused/stopped), fetches prices directly from CLOB API, WebSocket subscriptions for real-time price/order book updates, infers tick size from order book prices
-- `BotManager.ts` - Singleton orchestrating bot lifecycle, persistence, and trade execution. Uses `globalThis` for Next.js hot reload persistence
-- `DryRunExecutor.ts` - Simulates trades without real execution (for testing)
+- `Bot.ts` - Core bot class with state machine (running/paused/stopped), fetches prices directly from CLOB API, WebSocket subscriptions for real-time price/order book updates, infers tick size from order book prices, exposes `getOrderBook()` for marketable order detection
+- `BotManager.ts` - Singleton orchestrating bot lifecycle, persistence, and trade execution. Uses `globalThis` for Next.js hot reload persistence. `updateBotPosition()` syncs in-memory state with database
+- `DryRunExecutor.ts` - Simulates trades without real execution (for testing). `getMarketableFillPrice()` detects orders that cross the spread and fills them immediately at creation
+- `LimitOrderMatcher.ts` - Processes trades to fill limit orders. `fillMarketableOrders()` checks pending orders against order book each execution cycle to fill orders that become marketable
 - `LiveExecutor.ts` - Executes real trades via ClobClient
-- `types.ts` - Type definitions for BotConfig, BotInstance, Trade, StrategySignal, etc.
+- `types.ts` - Type definitions for BotConfig, BotInstance, Trade, StrategySignal, FillResult, etc.
 
 **`src/lib/strategies/`** - Strategy System:
 - `StrategyLoader.ts` - Parses markdown strategy files from `src/strategies/*.md` on-demand (no caching)
@@ -48,6 +49,7 @@ The **slug** (filename without `.md`) links documentation to executors.
 - `schema.ts` - Database schema with migrations (bots, trades, positions tables)
 - `BotRepository.ts` - Bot CRUD operations, converts between BotRow and BotConfig
 - `TradeRepository.ts` - Trade history with statistics, uses JOIN for bot names
+- `LimitOrderRepository.ts` - Limit order CRUD, `getOpenOrdersByBotId()` and `getOpenOrdersByAssetId()` for order queries
 
 **`src/strategies/`** - Strategy Definition Files (Markdown):
 - `test-oscillator.md` - Simple buy/sell oscillator for testing
@@ -69,6 +71,7 @@ Each `.md` file contains: frontmatter (name, version, author), description, algo
 - `POST /api/bots/[id]/resume` - Resume paused bot
 - `GET /api/bots/[id]/orders` - Get pending orders for bot
 - `DELETE /api/bots/[id]/orders` - Cancel all pending orders
+- `POST /api/bots/[id]/close-position` - Close position with market order (dry-run: sells at best bid)
 
 **Strategies:**
 - `GET /api/strategies` - List all strategies with stats
@@ -110,10 +113,28 @@ Each `.md` file contains: frontmatter (name, version, author), description, algo
 - Cancel All button to remove all pending orders
 - Prices formatted to match market tick size precision
 
+**Current Position Panel:**
+- Shows current position size, average entry price, outcome (YES/NO)
+- Real-time unrealized PnL based on mid-market price
+- Close Position button to exit with market sell order (dry-run mode)
+- Position synced between database and in-memory bot state
+
 **Price Precision:**
 - Tick size inferred from order book prices when `tick_size_change` events aren't available
 - All prices (order book, pending orders, signals) formatted to match market precision
 - `formatPrice()` helper uses tick size to determine decimal places
+
+### Limit Order Matching
+
+**Marketable Order Detection:**
+- BUY orders at or above best ask fill immediately at creation
+- SELL orders at or below best bid fill immediately at creation
+- `getMarketableFillPrice()` in DryRunExecutor checks spread crossing
+
+**Pending Order Fills:**
+- `fillMarketableOrders()` runs each execution cycle to check pending orders
+- Orders that become marketable due to market movement fill automatically
+- Fills update position, create trade records, and calculate PnL
 
 ### Components
 
@@ -123,7 +144,7 @@ Each `.md` file contains: frontmatter (name, version, author), description, algo
 - `BotCreateModal.tsx` - Modal for creating bots with strategy/market defaults
 
 **`src/components/trades/`:**
-- `TradesTable.tsx` - Trade history table with sticky header, bot name via JOIN
+- `TradesTable.tsx` - Trade history table with sticky header, bot name via JOIN, trade aggregation (consecutive same-side trades collapsed into expandable rows)
 
 ### Database
 
@@ -133,6 +154,7 @@ SQLite database stored at `data/polymarket-bot.db` (or `DATABASE_PATH` env var).
 - `bots` - Bot configurations and state
 - `trades` - Trade history with PnL tracking
 - `positions` - Bot positions
+- `limit_orders` - Pending limit orders with fill status
 
 ### Environment Variables
 

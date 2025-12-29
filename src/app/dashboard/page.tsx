@@ -71,6 +71,17 @@ export default function DashboardPage() {
   const [pagination, setPagination] = useState<SearchPagination>({ hasMore: false, page: 1 });
   const [hasSearched, setHasSearched] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [selectedMarket, setSelectedMarket] = useState<{ id: string; question: string } | null>(null);
+
+  const handleCreateBotForMarket = (market: Market) => {
+    setSelectedMarket({ id: market.id, question: market.question });
+    setShowCreateModal(true);
+  };
+
+  const handleCloseModal = () => {
+    setShowCreateModal(false);
+    setSelectedMarket(null);
+  };
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -365,8 +376,10 @@ export default function DashboardPage() {
         {/* Bot Create Modal */}
         <BotCreateModal
           isOpen={showCreateModal}
-          onClose={() => setShowCreateModal(false)}
+          onClose={handleCloseModal}
           onCreated={fetchBots}
+          defaultMarketId={selectedMarket?.id}
+          defaultMarketName={selectedMarket?.question}
         />
 
         {/* Markets List */}
@@ -396,39 +409,52 @@ export default function DashboardPage() {
               </div>
             )}
             {!searchLoading && markets.map((market) => (
-              <Link
+              <div
                 key={market.id}
-                href={`/market/${market.id}`}
-                className="block p-4 hover:bg-muted/50 transition-colors cursor-pointer"
+                className="p-4 hover:bg-muted/50 transition-colors"
               >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 mr-4">
-                    <p className="font-medium line-clamp-2">
+                <div className="flex items-start justify-between gap-4">
+                  <Link
+                    href={`/market/${market.id}`}
+                    className="flex-1 min-w-0 cursor-pointer"
+                  >
+                    <p className="font-medium line-clamp-2 hover:underline">
                       {market.question}
                     </p>
                     <p className="text-xs text-muted-foreground mt-1">
                       ID: {market.id.slice(0, 16)}...
                     </p>
-                  </div>
-                  <div className="text-right">
-                    {market.outcomePrices && market.outcomePrices.length >= 2 && (
-                      <div className="flex gap-4 text-sm">
-                        <span className="text-green-600">
-                          YES: {(parseFloat(market.outcomePrices[0]) * 100).toFixed(1)}%
-                        </span>
-                        <span className="text-red-600">
-                          NO: {(parseFloat(market.outcomePrices[1]) * 100).toFixed(1)}%
-                        </span>
-                      </div>
-                    )}
-                    {market.volume && (
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Vol: ${parseFloat(market.volume).toLocaleString()}
-                      </p>
-                    )}
+                  </Link>
+                  <div className="flex items-start gap-4 shrink-0">
+                    <div className="text-right">
+                      {market.outcomePrices && market.outcomePrices.length >= 2 && (
+                        <div className="flex gap-4 text-sm">
+                          <span className="text-green-600">
+                            YES: {(parseFloat(market.outcomePrices[0]) * 100).toFixed(1)}%
+                          </span>
+                          <span className="text-red-600">
+                            NO: {(parseFloat(market.outcomePrices[1]) * 100).toFixed(1)}%
+                          </span>
+                        </div>
+                      )}
+                      {market.volume && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Vol: ${parseFloat(market.volume).toLocaleString()}
+                        </p>
+                      )}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleCreateBotForMarket(market)}
+                      className="whitespace-nowrap"
+                    >
+                      <Bot className="w-3 h-3 mr-1" />
+                      Create Bot
+                    </Button>
                   </div>
                 </div>
-              </Link>
+              </div>
             ))}
           </div>
 

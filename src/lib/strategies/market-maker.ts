@@ -16,8 +16,8 @@ import { getGammaClient, getClobClient, hasCredentials } from "../polymarket/cli
 
 const DEFAULT_CONFIG: MarketMakerConfig = {
   spread: 0.02, // 2% spread
-  orderSize: "10", // 10 USDC per order
-  maxPosition: "100", // Max 100 USDC position
+  orderSize: "10", // 10 shares per order
+  maxPosition: "100", // Max $100 USDC position value
   minLiquidity: "1000", // Min 1000 USDC liquidity
   refreshInterval: 30000, // 30 seconds
 };
@@ -28,6 +28,7 @@ interface MarketMakerState {
   currentBid: Order | null;
   currentAsk: Order | null;
   position: number;
+  pendingBuyQuantity: number;
   isRunning: boolean;
 }
 
@@ -60,6 +61,7 @@ export class MarketMaker {
       currentBid: null,
       currentAsk: null,
       position: 0,
+      pendingBuyQuantity: 0,
       isRunning: true,
     };
 
@@ -170,11 +172,21 @@ export class MarketMaker {
       return [];
     }
 
-    const signals: TradeSignal[] = [];
-    const maxPosition = parseFloat(this.config.maxPosition);
+    // Get current mid price for value calculation
+    const bestBid = parseFloat(orderBook.bids[0]?.price || "0");
+    const bestAsk = parseFloat(orderBook.asks[0]?.price || "0");
+    const midPrice = (bestBid + bestAsk) / 2;
 
-    // Generate bid signal if we have room to buy
-    if (state.position < maxPosition) {
+    const signals: TradeSignal[] = [];
+    const maxPositionUsd = parseFloat(this.config.maxPosition); // Max position in USDC
+
+    // Calculate position value in USDC
+    const positionValueUsd = state.position * midPrice;
+    const pendingBuyValueUsd = state.pendingBuyQuantity * midPrice;
+    const effectiveValueUsd = positionValueUsd + pendingBuyValueUsd;
+
+    // Generate bid signal if effective position value (in USDC) is below maxPosition
+    if (effectiveValueUsd < maxPositionUsd) {
       signals.push({
         market: state.marketId,
         asset_id: assetId,
@@ -182,12 +194,12 @@ export class MarketMaker {
         side: "YES",
         price: quotes.bid,
         size: this.config.orderSize,
-        reason: "Market making - providing bid liquidity",
+        reason: `Market making - bid (value: $${positionValueUsd.toFixed(2)}, pending: $${pendingBuyValueUsd.toFixed(2)}, max: $${maxPositionUsd})`,
       });
     }
 
     // Generate ask signal if we have position to sell
-    if (state.position > -maxPosition) {
+    if (state.position > 0) {
       signals.push({
         market: state.marketId,
         asset_id: assetId,

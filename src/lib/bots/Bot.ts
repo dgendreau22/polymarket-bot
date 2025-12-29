@@ -22,10 +22,11 @@ import type {
 import type { OrderBook, LastTrade, TickSize } from '../polymarket/types';
 import { getExecutor } from '../strategies/registry';
 import { getWebSocket } from '../polymarket/websocket';
-import { processTradeForBotFills } from './LimitOrderMatcher';
+import { processTradeForBotFills, fillMarketableOrders } from './LimitOrderMatcher';
 import {
   getOpenOrdersByBotId,
   cancelAllBotOrders,
+  cancelStaleOrders,
   rowToLimitOrder,
 } from '../persistence/LimitOrderRepository';
 
@@ -456,6 +457,57 @@ export class Bot {
       return;
     }
 
+    // Cancel stale orders for market maker strategy (use defaults if not configured)
+    const strategyConfig = this.config.strategyConfig || {};
+    const isMarketMaker = this.config.strategySlug === 'market-maker';
+
+    // Use configured values or defaults for market maker
+    const maxOrderAge = strategyConfig.maxOrderAge as number | undefined
+      ?? (isMarketMaker ? 60 : undefined);  // Default: 60 seconds for market maker
+    const maxPriceDistance = strategyConfig.maxPriceDistance as number | undefined
+      ?? (isMarketMaker ? 0.05 : undefined);  // Default: 5% for market maker
+
+    if (maxOrderAge !== undefined || maxPriceDistance !== undefined) {
+      // Use the correct price based on the outcome being traded
+      const outcome = (strategyConfig.outcome as 'YES' | 'NO') || 'YES';
+      const currentMidPrice = outcome === 'YES'
+        ? parseFloat(this.currentPrice.yes)
+        : parseFloat(this.currentPrice.no);
+
+      if (currentMidPrice > 0 && currentMidPrice < 1) {  // Valid price range
+        const cancelledIds = cancelStaleOrders(
+          this.id,
+          currentMidPrice,
+          maxOrderAge,
+          maxPriceDistance
+        );
+        if (cancelledIds.length > 0) {
+          console.log(`[Bot ${this.id}] Cancelled ${cancelledIds.length} stale orders (mid=${currentMidPrice.toFixed(4)})`);
+        }
+      }
+    }
+
+    // Check and fill any pending orders that are now marketable against the order book
+    if (this.currentOrderBook) {
+      const marketableFills = fillMarketableOrders(this.id, this.currentOrderBook);
+      for (const fill of marketableFills) {
+        this.handleOrderFilled(fill);
+      }
+    }
+
+    // Calculate pending order quantities
+    const openOrders = getOpenOrdersByBotId(this.id);
+    let pendingBuyQuantity = 0;
+    let pendingSellQuantity = 0;
+    for (const order of openOrders) {
+      const remainingQty = parseFloat(order.quantity) - parseFloat(order.filled_quantity);
+      if (order.side === 'BUY') {
+        pendingBuyQuantity += remainingQty;
+      } else {
+        pendingSellQuantity += remainingQty;
+      }
+    }
+
     // Build context
     const context: StrategyContext = {
       bot: this.toInstance(),
@@ -464,6 +516,8 @@ export class Bot {
       orderBook: this.currentOrderBook || undefined,
       lastTrade: this.currentLastTrade || undefined,
       tickSize: this.currentTickSize || undefined,
+      pendingBuyQuantity,
+      pendingSellQuantity,
     };
 
     // Execute strategy
@@ -621,22 +675,14 @@ export class Bot {
 
   /**
    * Handle an order fill
-   * Updates position based on the filled order
+   * Updates in-memory position based on the fill result
    */
   handleOrderFilled(fill: FillResult): void {
-    const orders = getOpenOrdersByBotId(this.id);
-    const orderRow = orders.find(o => o.id === fill.orderId);
-
-    if (!orderRow) {
-      console.warn(`[Bot ${this.id}] Order ${fill.orderId} not found for fill`);
-      return;
-    }
-
     const fillQty = parseFloat(fill.filledQuantity);
     const fillPrice = parseFloat(fill.fillPrice);
     const currentSize = parseFloat(this.position.size);
 
-    if (orderRow.side === 'BUY') {
+    if (fill.side === 'BUY') {
       // Buying increases position
       const newSize = currentSize + fillQty;
       const currentAvg = parseFloat(this.position.avgEntryPrice);
@@ -646,7 +692,7 @@ export class Bot {
 
       this.position.size = newSize.toString();
       this.position.avgEntryPrice = newAvg.toFixed(6);
-      this.position.outcome = orderRow.outcome;
+      this.position.outcome = fill.outcome;
 
       console.log(
         `[Bot ${this.id}] Position updated (BUY fill): size=${newSize.toFixed(4)}, avgPrice=${newAvg.toFixed(4)}`
@@ -680,10 +726,8 @@ export class Bot {
       }
     }
 
-    // Update metrics
-    if (fill.isFullyFilled) {
-      this.metrics.totalTrades++;
-    }
+    // Update metrics - count every fill as a trade
+    this.metrics.totalTrades++;
     this.metrics.totalPnl = this.position.realizedPnl;
     this.updatedAt = new Date();
 
@@ -761,6 +805,13 @@ export class Bot {
    */
   getMetrics(): BotMetrics {
     return { ...this.metrics };
+  }
+
+  /**
+   * Get current order book (for marketable order detection)
+   */
+  getOrderBook(): OrderBook | null {
+    return this.currentOrderBook;
   }
 
   /**

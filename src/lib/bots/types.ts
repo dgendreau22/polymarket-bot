@@ -193,6 +193,8 @@ export interface FillResult {
   remainingQuantity: string;
   fillPrice: string;
   isFullyFilled: boolean;
+  side: 'BUY' | 'SELL';
+  outcome: 'YES' | 'NO';
 }
 
 // ============================================================================
@@ -255,6 +257,10 @@ export interface StrategyContext {
   orderBook?: OrderBook;
   lastTrade?: LastTrade;
   tickSize?: TickSize;
+  /** Total quantity of pending BUY orders (not yet filled) */
+  pendingBuyQuantity?: number;
+  /** Total quantity of pending SELL orders (not yet filled) */
+  pendingSellQuantity?: number;
 }
 
 /** Strategy signal output */

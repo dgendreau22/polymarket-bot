@@ -19,7 +19,11 @@ import { getWebSocket } from "@/lib/polymarket/websocket";
 import type { BotInstance, Trade, StrategyDefinition, LimitOrder } from "@/lib/bots/types";
 import type { LastTrade, OrderBook, OrderBookEntry } from "@/lib/polymarket/types";
 import { cn } from "@/lib/utils";
-import { CircleDot, XCircle } from "lucide-react";
+import { CircleDot, XCircle, ChevronUp, ChevronDown } from "lucide-react";
+
+// Sort configuration for pending orders
+type OrderSortColumn = 'price' | 'side' | 'outcome' | 'quantity' | 'filled' | 'status' | 'latest';
+type SortDirection = 'asc' | 'desc';
 
 // Format strategy slug to display name (e.g., "test-oscillator" -> "Test Oscillator")
 function formatStrategyName(slug: string): string {
@@ -27,6 +31,57 @@ function formatStrategyName(slug: string): string {
     .split("-")
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
+}
+
+// Aggregated order type for grouping orders at the same price
+interface AggregatedOrder {
+  price: string;
+  side: 'BUY' | 'SELL';
+  outcome: 'YES' | 'NO';
+  totalQuantity: number;
+  totalFilled: number;
+  orderCount: number;
+  latestCreatedAt: Date;
+  hasPartialFill: boolean;
+}
+
+// Aggregate orders by price+side+outcome and sort by latest first
+function aggregateOrders(orders: LimitOrder[]): AggregatedOrder[] {
+  const grouped = new Map<string, AggregatedOrder>();
+
+  for (const order of orders) {
+    const key = `${order.price}-${order.side}-${order.outcome}`;
+    const existing = grouped.get(key);
+    const createdAt = new Date(order.createdAt);
+
+    if (existing) {
+      existing.totalQuantity += parseFloat(order.quantity);
+      existing.totalFilled += parseFloat(order.filledQuantity);
+      existing.orderCount += 1;
+      if (createdAt > existing.latestCreatedAt) {
+        existing.latestCreatedAt = createdAt;
+      }
+      if (order.status === 'partially_filled') {
+        existing.hasPartialFill = true;
+      }
+    } else {
+      grouped.set(key, {
+        price: order.price,
+        side: order.side,
+        outcome: order.outcome,
+        totalQuantity: parseFloat(order.quantity),
+        totalFilled: parseFloat(order.filledQuantity),
+        orderCount: 1,
+        latestCreatedAt: createdAt,
+        hasPartialFill: order.status === 'partially_filled',
+      });
+    }
+  }
+
+  // Sort by latest first
+  return Array.from(grouped.values()).sort(
+    (a, b) => b.latestCreatedAt.getTime() - a.latestCreatedAt.getTime()
+  );
 }
 
 export default function BotDetailPage() {
@@ -49,6 +104,10 @@ export default function BotDetailPage() {
   const [isConnected, setIsConnected] = useState(false);
   const [tickSize, setTickSize] = useState<string>("0.0001"); // Default 4 decimals
 
+  // Pending orders sort state
+  const [orderSortColumn, setOrderSortColumn] = useState<OrderSortColumn>('price');
+  const [orderSortDirection, setOrderSortDirection] = useState<SortDirection>('desc');
+
   // Calculate decimal places from tick size
   const getDecimals = useCallback((tick: string) => {
     const tickNum = parseFloat(tick);
@@ -61,6 +120,56 @@ export default function BotDetailPage() {
     const decimals = getDecimals(tickSize);
     return parseFloat(String(price)).toFixed(decimals);
   }, [tickSize, getDecimals]);
+
+  // Infer tick size from price string (strips trailing zeros to get actual precision)
+  const inferTickSize = useCallback((price: string): string => {
+    const trimmed = parseFloat(price).toString();
+    const parts = trimmed.split('.');
+    if (parts.length < 2) return '1';
+    const decimals = parts[1].length;
+    return (1 / Math.pow(10, decimals)).toString();
+  }, []);
+
+  // Handle column header click for sorting
+  const handleOrderSort = useCallback((column: OrderSortColumn) => {
+    if (orderSortColumn === column) {
+      setOrderSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setOrderSortColumn(column);
+      setOrderSortDirection(column === 'price' ? 'desc' : 'asc');
+    }
+  }, [orderSortColumn]);
+
+  // Sort aggregated orders
+  const sortOrders = useCallback((orders: AggregatedOrder[]): AggregatedOrder[] => {
+    return [...orders].sort((a, b) => {
+      let comparison = 0;
+      switch (orderSortColumn) {
+        case 'price':
+          comparison = parseFloat(a.price) - parseFloat(b.price);
+          break;
+        case 'side':
+          comparison = a.side.localeCompare(b.side);
+          break;
+        case 'outcome':
+          comparison = a.outcome.localeCompare(b.outcome);
+          break;
+        case 'quantity':
+          comparison = a.totalQuantity - b.totalQuantity;
+          break;
+        case 'filled':
+          comparison = a.totalFilled - b.totalFilled;
+          break;
+        case 'status':
+          comparison = (a.hasPartialFill ? 1 : 0) - (b.hasPartialFill ? 1 : 0);
+          break;
+        case 'latest':
+          comparison = a.latestCreatedAt.getTime() - b.latestCreatedAt.getTime();
+          break;
+      }
+      return orderSortDirection === 'asc' ? comparison : -comparison;
+    });
+  }, [orderSortColumn, orderSortDirection]);
 
   const fetchData = useCallback(async () => {
     try {
@@ -158,11 +267,24 @@ export default function BotDetailPage() {
           );
           setBestAsk(sortedAsks[0].price);
         }
+
+        // Infer tick size from order book prices
+        const samplePrice = bids[0]?.price || asks[0]?.price;
+        if (samplePrice) {
+          const inferred = inferTickSize(samplePrice);
+          setTickSize((current) => {
+            if (current === "0.0001" || parseFloat(inferred) > parseFloat(current)) {
+              console.log("[BotPage] Inferred tick size:", inferred);
+              return inferred;
+            }
+            return current;
+          });
+        }
       }
     } catch (error) {
       console.error("Failed to fetch order book:", error);
     }
-  }, []);
+  }, [inferTickSize]);
 
   // Fetch last trade price from order book mid-price (more accurate than market-level lastTradePrice)
   const fetchLastTradePrice = useCallback(async (assetId: string) => {
@@ -238,6 +360,18 @@ export default function BotDetailPage() {
         );
         setBestAsk(sortedAsks[0].price);
       }
+
+      // Infer tick size from order book prices
+      const samplePrice = bids[0]?.price || asks[0]?.price;
+      if (samplePrice) {
+        const inferred = inferTickSize(samplePrice);
+        setTickSize((current) => {
+          if (current === "0.0001" || parseFloat(inferred) > parseFloat(current)) {
+            return inferred;
+          }
+          return current;
+        });
+      }
     };
 
     const tradeCallback = (trade: LastTrade) => {
@@ -280,7 +414,7 @@ export default function BotDetailPage() {
       ws.removeOrderBookCallback(assetId, orderBookCallback);
       ws.removeTradeCallback(assetId, tradeCallback);
     };
-  }, [bot?.config.assetId, fetchOrderBook, fetchLastTradePrice]);
+  }, [bot?.config.assetId, fetchOrderBook, fetchLastTradePrice, inferTickSize]);
 
   if (loading) {
     return (
@@ -310,8 +444,32 @@ export default function BotDetailPage() {
   const pnl = parseFloat(bot.metrics.totalPnl);
   const positionSize = parseFloat(bot.position.size);
   const avgPrice = parseFloat(bot.position.avgEntryPrice);
-  const winRate = bot.metrics.totalTrades > 0
-    ? (bot.metrics.winningTrades / bot.metrics.totalTrades) * 100
+  // Win rate based on trades with outcomes (winning + losing), not all trades
+  const tradesWithOutcome = bot.metrics.winningTrades + bot.metrics.losingTrades;
+  const winRate = tradesWithOutcome > 0
+    ? (bot.metrics.winningTrades / tradesWithOutcome) * 100
+    : 0;
+
+  // Current price from last trade (for unrealized PnL calculation)
+  const currentPrice = lastTrade?.price ? parseFloat(lastTrade.price) : 0;
+
+  // Realized PnL from closed trades
+  const realizedPnl = parseFloat(bot.position.realizedPnl);
+
+  // Unrealized PnL = (current_price - avg_entry) * position_size
+  const unrealizedPnl = positionSize > 0 && currentPrice > 0
+    ? (currentPrice - avgPrice) * positionSize
+    : 0;
+
+  // Total PnL = realized + unrealized
+  const totalPositionPnl = realizedPnl + unrealizedPnl;
+
+  // Position value at current price
+  const positionValue = positionSize * currentPrice;
+
+  // Unrealized PnL percentage
+  const unrealizedPnlPercent = positionSize > 0 && avgPrice > 0
+    ? ((currentPrice - avgPrice) / avgPrice) * 100
     : 0;
 
   // Get bot's configured parameters
@@ -321,7 +479,7 @@ export default function BotDetailPage() {
     <div className="min-h-screen bg-background">
       {/* Header */}
       <div className="bg-card border-b sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-8 py-4">
+        <div className="max-w-[1600px] mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <Link href="/dashboard" className="text-muted-foreground hover:text-foreground">
@@ -354,7 +512,7 @@ export default function BotDetailPage() {
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto p-8">
+      <div className="max-w-[1600px] mx-auto px-4 py-6">
         {/* Statistics */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <div className="bg-card border rounded-lg p-4">
@@ -367,7 +525,7 @@ export default function BotDetailPage() {
             </p>
             {positionSize > 0 && (
               <p className="text-xs text-muted-foreground">
-                @ ${avgPrice.toFixed(4)}
+                @ ${formatPrice(avgPrice)}
               </p>
             )}
           </div>
@@ -390,7 +548,7 @@ export default function BotDetailPage() {
               <span className="text-xs text-muted-foreground">Total PnL</span>
             </div>
             <p className={`text-2xl font-bold ${pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
-              ${pnl.toFixed(4)}
+              ${pnl.toFixed(2)}
             </p>
           </div>
 
@@ -403,8 +561,96 @@ export default function BotDetailPage() {
           </div>
         </div>
 
-        {/* Market Data & Pending Orders - Side by Side */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6 lg:h-[700px]">
+        {/* Current Position */}
+        <div className="bg-card border rounded-lg p-6 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold">Current Position</h2>
+            {positionSize > 0 && (
+              <button
+                onClick={async () => {
+                  if (!confirm(`Close position by selling ${positionSize.toFixed(2)} shares at market price?`)) return;
+                  try {
+                    const res = await fetch(`/api/bots/${id}/close-position`, { method: 'POST' });
+                    const data = await res.json();
+                    if (data.success) {
+                      fetchData();
+                    } else {
+                      alert(data.error || 'Failed to close position');
+                    }
+                  } catch (err) {
+                    alert('Failed to close position');
+                  }
+                }}
+                className="px-3 py-1.5 text-sm bg-red-500/20 text-red-500 hover:bg-red-500/30 rounded-md font-medium transition-colors"
+              >
+                Close Position
+              </button>
+            )}
+          </div>
+          {positionSize > 0 ? (
+            <div className="space-y-4">
+              {/* Position Details */}
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Side</p>
+                  <span className="font-semibold text-green-500">YES</span>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Size</p>
+                  <p className="font-mono font-medium">{positionSize.toFixed(2)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Avg Entry</p>
+                  <p className="font-mono font-medium">{formatPrice(avgPrice)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Current Price</p>
+                  <p className="font-mono font-medium">
+                    {currentPrice > 0 ? formatPrice(currentPrice) : "—"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Value</p>
+                  <p className="font-mono font-medium">
+                    {currentPrice > 0 ? `$${positionValue.toFixed(2)}` : "—"}
+                  </p>
+                </div>
+              </div>
+
+              {/* PnL Summary */}
+              <div className="border-t pt-4 grid grid-cols-3 gap-4">
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Unrealized PnL</p>
+                  <p className={`font-mono font-medium ${unrealizedPnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+                    {unrealizedPnl >= 0 ? "+" : ""}${unrealizedPnl.toFixed(2)}
+                    {currentPrice > 0 && (
+                      <span className="text-xs ml-1">
+                        ({unrealizedPnlPercent >= 0 ? "+" : ""}{unrealizedPnlPercent.toFixed(1)}%)
+                      </span>
+                    )}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Realized PnL</p>
+                  <p className={`font-mono font-medium ${realizedPnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+                    {realizedPnl >= 0 ? "+" : ""}${realizedPnl.toFixed(2)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Total PnL</p>
+                  <p className={`font-mono font-medium ${totalPositionPnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+                    {totalPositionPnl >= 0 ? "+" : ""}${totalPositionPnl.toFixed(2)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p className="text-muted-foreground">No active position</p>
+          )}
+        </div>
+
+        {/* Market Data, Pending Orders & Recent Trades - Side by Side */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6 lg:h-[700px]">
           {/* Market Data */}
           <div className="bg-card border rounded-lg p-6 flex flex-col h-full overflow-hidden">
             <div className="flex items-center justify-between mb-4 flex-shrink-0">
@@ -495,16 +741,16 @@ export default function BotDetailPage() {
                             .slice(0, 10)
                         : [];
 
-                      // Get active order prices for highlighting
+                      // Get active order prices for highlighting (normalize to numbers for comparison)
                       const buyOrderPrices = new Set(
                         activeOrders
                           .filter((o) => o.side === "BUY")
-                          .map((o) => o.price)
+                          .map((o) => parseFloat(o.price))
                       );
                       const sellOrderPrices = new Set(
                         activeOrders
                           .filter((o) => o.side === "SELL")
-                          .map((o) => o.price)
+                          .map((o) => parseFloat(o.price))
                       );
 
                       if (topBids.length === 0 && topAsks.length === 0) {
@@ -539,8 +785,8 @@ export default function BotDetailPage() {
                               {Array.from({ length: 10 }).map((_, i) => {
                                 const bid: OrderBookEntry | undefined = topBids[i];
                                 const ask: OrderBookEntry | undefined = topAsks[i];
-                                const hasBuyOrder = bid && buyOrderPrices.has(bid.price);
-                                const hasSellOrder = ask && sellOrderPrices.has(ask.price);
+                                const hasBuyOrder = bid && buyOrderPrices.has(parseFloat(bid.price));
+                                const hasSellOrder = ask && sellOrderPrices.has(parseFloat(ask.price));
                                 return (
                                   <tr
                                     key={i}
@@ -566,13 +812,13 @@ export default function BotDetailPage() {
                                       "py-1.5 px-2 text-green-600 font-medium",
                                       hasBuyOrder && "bg-blue-500/10"
                                     )}>
-                                      {bid?.price || "—"}
+                                      {bid?.price ? formatPrice(bid.price) : "—"}
                                     </td>
                                     <td className={cn(
                                       "py-1.5 px-2 text-right text-red-600 font-medium",
                                       hasSellOrder && "bg-blue-500/10"
                                     )}>
-                                      {ask?.price || "—"}
+                                      {ask?.price ? formatPrice(ask.price) : "—"}
                                     </td>
                                     <td className={cn(
                                       "py-1.5 px-2 text-right text-red-600",
@@ -634,61 +880,123 @@ export default function BotDetailPage() {
               </p>
             ) : (
               <div className="overflow-auto flex-1">
-              <table className="w-full text-sm">
-                <thead>
+              <table className="w-full text-sm table-fixed">
+                <thead className="sticky top-0 bg-card z-10">
                   <tr className="text-muted-foreground border-b">
-                    <th className="text-left py-2 px-2">Side</th>
-                    <th className="text-left py-2 px-2">Outcome</th>
-                    <th className="text-right py-2 px-2">Price</th>
-                    <th className="text-right py-2 px-2">Quantity</th>
-                    <th className="text-right py-2 px-2">Filled</th>
-                    <th className="text-left py-2 px-2">Status</th>
-                    <th className="text-left py-2 px-2">Created</th>
+                    <th
+                      className="text-left py-2 px-1 cursor-pointer hover:text-foreground select-none w-[65px] bg-card"
+                      onClick={() => handleOrderSort('side')}
+                    >
+                      <span className="inline-flex items-center gap-0.5">
+                        Side
+                        {orderSortColumn === 'side' && (orderSortDirection === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                      </span>
+                    </th>
+                    <th
+                      className="text-left py-2 px-1 cursor-pointer hover:text-foreground select-none w-[28px] bg-card"
+                      onClick={() => handleOrderSort('outcome')}
+                    >
+                      <span className="inline-flex items-center gap-0.5">
+                        {orderSortColumn === 'outcome' && (orderSortDirection === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                      </span>
+                    </th>
+                    <th
+                      className="text-right py-2 px-1 cursor-pointer hover:text-foreground select-none bg-card"
+                      onClick={() => handleOrderSort('price')}
+                    >
+                      <span className="inline-flex items-center gap-0.5 justify-end">
+                        Price
+                        {orderSortColumn === 'price' && (orderSortDirection === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                      </span>
+                    </th>
+                    <th
+                      className="text-right py-2 px-1 cursor-pointer hover:text-foreground select-none w-[50px] bg-card"
+                      onClick={() => handleOrderSort('quantity')}
+                    >
+                      <span className="inline-flex items-center gap-0.5 justify-end">
+                        Qty
+                        {orderSortColumn === 'quantity' && (orderSortDirection === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                      </span>
+                    </th>
+                    <th
+                      className="text-right py-2 px-1 cursor-pointer hover:text-foreground select-none w-[70px] bg-card"
+                      onClick={() => handleOrderSort('filled')}
+                    >
+                      <span className="inline-flex items-center gap-0.5 justify-end">
+                        Fill
+                        {orderSortColumn === 'filled' && (orderSortDirection === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                      </span>
+                    </th>
+                    <th
+                      className="text-left py-2 px-1 cursor-pointer hover:text-foreground select-none w-[50px] bg-card"
+                      onClick={() => handleOrderSort('status')}
+                    >
+                      <span className="inline-flex items-center gap-0.5">
+                        {orderSortColumn === 'status' && (orderSortDirection === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                      </span>
+                    </th>
+                    <th
+                      className="text-left py-2 px-1 cursor-pointer hover:text-foreground select-none w-[60px] bg-card"
+                      onClick={() => handleOrderSort('latest')}
+                    >
+                      <span className="inline-flex items-center gap-0.5">
+                        Time
+                        {orderSortColumn === 'latest' && (orderSortDirection === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                      </span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {activeOrders.map((order) => {
-                    const filled = parseFloat(order.filledQuantity);
-                    const total = parseFloat(order.quantity);
-                    const fillPercent = total > 0 ? (filled / total) * 100 : 0;
+                  {sortOrders(aggregateOrders(activeOrders)).map((order) => {
+                    const fillPercent = order.totalQuantity > 0
+                      ? (order.totalFilled / order.totalQuantity) * 100
+                      : 0;
                     return (
-                      <tr key={order.id} className="border-b border-muted last:border-0">
-                        <td
-                          className={cn(
-                            "py-2 px-2 font-medium",
-                            order.side === "BUY" ? "text-green-600" : "text-red-600"
-                          )}
-                        >
-                          {order.side}
-                        </td>
-                        <td className="py-2 px-2">{order.outcome}</td>
-                        <td className="py-2 px-2 text-right font-mono">
-                          {formatPrice(order.price)}
-                        </td>
-                        <td className="py-2 px-2 text-right font-mono">
-                          {parseFloat(order.quantity).toFixed(2)}
-                        </td>
-                        <td className="py-2 px-2 text-right font-mono">
-                          <span className="text-muted-foreground">
-                            {filled.toFixed(2)} ({fillPercent.toFixed(0)}%)
-                          </span>
-                        </td>
-                        <td className="py-2 px-2">
+                      <tr key={`${order.price}-${order.side}-${order.outcome}`} className="border-b border-muted last:border-0">
+                        <td className="py-1.5 px-1">
                           <span
                             className={cn(
-                              "inline-flex items-center px-2 py-0.5 rounded text-xs font-medium",
-                              order.status === "open" && "bg-blue-500/10 text-blue-500",
-                              order.status === "partially_filled" &&
-                                "bg-yellow-500/10 text-yellow-500"
+                              "px-1.5 py-0.5 rounded text-xs font-medium",
+                              order.side === "BUY" ? "bg-green-500/20 text-green-500" : "bg-red-500/20 text-red-500"
                             )}
                           >
-                            {order.status === "partially_filled"
-                              ? "Partial"
-                              : order.status.charAt(0).toUpperCase() + order.status.slice(1)}
+                            {order.side}
+                            {order.orderCount > 1 && (
+                              <span className="ml-1 opacity-70">({order.orderCount})</span>
+                            )}
                           </span>
                         </td>
-                        <td className="py-2 px-2 text-muted-foreground text-xs">
-                          {new Date(order.createdAt).toLocaleTimeString()}
+                        <td className="py-1.5 px-1">
+                          <span
+                            className={cn(
+                              "w-5 h-5 inline-flex items-center justify-center rounded text-xs font-medium",
+                              order.outcome === "YES" ? "bg-blue-500/20 text-blue-500" : "bg-purple-500/20 text-purple-500"
+                            )}
+                          >
+                            {order.outcome === "YES" ? "Y" : "N"}
+                          </span>
+                        </td>
+                        <td className="py-1.5 px-1 text-right font-mono">
+                          {formatPrice(order.price)}
+                        </td>
+                        <td className="py-1.5 px-1 text-right font-mono">
+                          {order.totalQuantity.toFixed(1)}
+                        </td>
+                        <td className="py-1.5 px-1 text-right font-mono text-muted-foreground text-xs">
+                          {fillPercent.toFixed(0)}%
+                        </td>
+                        <td className="py-1.5 px-1">
+                          <span
+                            className={cn(
+                              "w-2 h-2 inline-block rounded-full",
+                              !order.hasPartialFill && "bg-blue-500",
+                              order.hasPartialFill && "bg-yellow-500"
+                            )}
+                            title={order.hasPartialFill ? "Partial fill" : "Open"}
+                          />
+                        </td>
+                        <td className="py-1.5 px-1 text-muted-foreground text-xs">
+                          {order.latestCreatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                         </td>
                       </tr>
                     );
@@ -698,13 +1006,13 @@ export default function BotDetailPage() {
             </div>
           )}
           </div>
-        </div>
 
-        {/* Recent Trades */}
-        <div className="bg-card border rounded-lg p-6 mb-6">
-          <h2 className="font-semibold mb-4">Recent Trades</h2>
-          <div className="max-h-[400px] overflow-auto">
-            <TradesTable trades={trades} />
+          {/* Recent Trades */}
+          <div className="bg-card border rounded-lg p-6 flex flex-col h-full overflow-hidden">
+            <h2 className="font-semibold mb-4 flex-shrink-0">Recent Trades</h2>
+            <div className="flex-1 overflow-auto">
+              <TradesTable trades={trades} formatPrice={formatPrice} />
+            </div>
           </div>
         </div>
 

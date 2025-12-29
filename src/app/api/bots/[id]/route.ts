@@ -7,6 +7,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getBotManager } from '@/lib/bots';
+import { getPosition, rowToPosition } from '@/lib/persistence/BotRepository';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -31,6 +32,16 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         { status: 404 }
       );
     }
+
+    // Fetch position from database to ensure we have the latest
+    const dbPosition = getPosition(id);
+    console.log(`[API GET /bots/${id}] dbPosition:`, dbPosition);
+    if (dbPosition) {
+      const position = rowToPosition(dbPosition);
+      console.log(`[API GET /bots/${id}] Converted position:`, position);
+      bot.position = position;
+    }
+    console.log(`[API GET /bots/${id}] Final bot.position:`, bot.position);
 
     return NextResponse.json({
       success: true,

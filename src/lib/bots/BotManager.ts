@@ -206,6 +206,12 @@ class BotManager {
 
     await bot.stop();
 
+    // Cancel all pending orders to prevent stale orders from filling later
+    const cancelledCount = cancelAllBotOrders(botId);
+    if (cancelledCount > 0) {
+      console.log(`[BotManager] Cancelled ${cancelledCount} pending orders for bot: ${botId}`);
+    }
+
     // Update database
     updateBotState(botId, 'stopped', {
       stoppedAt: new Date().toISOString(),
@@ -287,6 +293,25 @@ class BotManager {
   getBot(botId: string): BotInstance | undefined {
     const bot = this.bots.get(botId);
     return bot?.toInstance();
+  }
+
+  /**
+   * Update a bot's in-memory position (merges with existing position)
+   */
+  updateBotPosition(botId: string, updates: Partial<{
+    size: string;
+    avgEntryPrice: string;
+    realizedPnl: string;
+    outcome: 'YES' | 'NO';
+  }>): void {
+    const bot = this.bots.get(botId);
+    if (bot) {
+      const currentPosition = bot.getPosition();
+      bot.setPosition({
+        ...currentPosition,
+        ...updates,
+      });
+    }
   }
 
   /**

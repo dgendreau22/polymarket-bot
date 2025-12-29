@@ -147,7 +147,7 @@ export function getTradesByStrategy(strategySlug: string, limit?: number): Trade
 export function updateTradeStatus(
   id: string,
   status: Trade['status'],
-  updates?: { pnl?: string; orderId?: string; price?: string; totalValue?: string }
+  updates?: { pnl?: string; orderId?: string; price?: string; totalValue?: string; quantity?: string }
 ): void {
   const db = getDatabase();
 
@@ -169,6 +169,10 @@ export function updateTradeStatus(
   if (updates?.totalValue !== undefined) {
     query += ', total_value = ?';
     params.push(updates.totalValue);
+  }
+  if (updates?.quantity !== undefined) {
+    query += ', quantity = ?';
+    params.push(updates.quantity);
   }
 
   query += ' WHERE id = ?';

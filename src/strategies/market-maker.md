@@ -29,10 +29,10 @@ The market maker continuously quotes both sides of the market, earning the sprea
 | Name | Type | Default | Min | Max | Description |
 |------|------|---------|-----|-----|-------------|
 | spread | number | 0.02 | 0.005 | 0.10 | Target spread as decimal (2% = 0.02) |
-| orderSize | string | 10 | - | - | Size per order in USDC |
+| orderSize | string | 10 | - | - | Size per order in shares |
 | maxPosition | string | 100 | - | - | Maximum position size in USDC |
-| minLiquidity | string | 1000 | - | - | Minimum order book liquidity required |
-| refreshInterval | number | 30000 | 5000 | 300000 | Order refresh interval in ms |
+| maxOrderAge | number | 60 | 10 | 300 | Cancel orders older than this (seconds) |
+| maxPriceDistance | number | 0.05 | 0.01 | 0.20 | Cancel orders more than this % from mid price |
 
 ## Risk Management
 

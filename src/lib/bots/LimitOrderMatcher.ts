@@ -7,14 +7,16 @@
  * - SELL orders fill when trade price >= order price
  */
 
-import type { LastTrade } from '../polymarket/types';
+import type { LastTrade, OrderBook } from '../polymarket/types';
 import type { FillResult, LimitOrderRow } from './types';
+import { getOpenOrdersByBotId } from '../persistence/LimitOrderRepository';
 import {
   getOpenOrdersByAssetId,
   updateOrderFill,
   rowToLimitOrder,
 } from '../persistence/LimitOrderRepository';
 import { updateTradeStatus, getTrades } from '../persistence/TradeRepository';
+import { getPosition, updatePosition, getOrCreatePosition, getBotById } from '../persistence/BotRepository';
 
 /**
  * Process a market trade to check for order fills
@@ -58,8 +60,8 @@ export function processTradeForFills(lastTrade: LastTrade): FillResult[] {
       // Update order in database
       updateOrderFill(order.id, newFilledQuantity.toFixed(6), newStatus);
 
-      // Update associated trade to filled status
-      updateTradeForOrderFill(order.id, order.bot_id, lastTrade.price);
+      // Update position and trade for this fill
+      updateTradeForOrderFill(order.id, order.bot_id, order.asset_id, lastTrade.price, fillAmount, isFullyFilled, order.side, newFilledQuantity);
 
       // Create fill result
       const fillResult: FillResult = {
@@ -69,6 +71,8 @@ export function processTradeForFills(lastTrade: LastTrade): FillResult[] {
         remainingQuantity: newRemainingQuantity.toFixed(6),
         fillPrice: lastTrade.price,
         isFullyFilled,
+        side: order.side,
+        outcome: order.outcome,
       };
 
       fills.push(fillResult);
@@ -110,37 +114,118 @@ function checkPriceCrossing(
 
 /**
  * Update the trade record when its order is filled
+ * Also updates position and calculates PnL for SELL trades
+ *
+ * @param orderId - The order ID
+ * @param botId - The bot ID
+ * @param assetId - The asset ID (needed to create position if missing)
+ * @param fillPrice - The price at which the order was filled
+ * @param fillAmount - The quantity filled in this fill event
+ * @param isFullyFilled - Whether the order is now fully filled
+ * @param orderSide - The side of the order (BUY or SELL)
+ * @param totalFilledQuantity - The total quantity filled so far (for updating trade record)
  */
-function updateTradeForOrderFill(orderId: string, botId: string, fillPrice: string): void {
-  // Find the pending trade associated with this order
-  const pendingTrades = getTrades({
-    botId,
-    status: 'pending',
-  });
+function updateTradeForOrderFill(
+  orderId: string,
+  botId: string,
+  assetId: string,
+  fillPrice: string,
+  fillAmount: number,
+  isFullyFilled: boolean,
+  orderSide: 'BUY' | 'SELL',
+  totalFilledQuantity: number
+): void {
+  const fillPriceNum = parseFloat(fillPrice);
 
-  console.log(`[OrderMatcher] Looking for pending trade with orderId ${orderId.slice(0, 8)}... | Found ${pendingTrades.length} pending trades`);
+  // Get or create position - this ensures position exists for first trade
+  const bot = getBotById(botId);
+  if (!bot) {
+    console.warn(`[OrderMatcher] Bot not found: ${botId}`);
+    return;
+  }
 
-  const trade = pendingTrades.find((t) => t.order_id === orderId);
+  const position = getOrCreatePosition(botId, bot.market_id, assetId);
+  const currentSize = parseFloat(position.size);
+  let pnl = 0;
 
-  if (trade) {
-    // Calculate new total value based on fill price
-    const quantity = parseFloat(trade.quantity);
-    const newTotalValue = (parseFloat(fillPrice) * quantity).toFixed(6);
+  if (orderSide === 'SELL') {
+    // Safety check: can't sell more than current position
+    if (currentSize < fillAmount) {
+      console.warn(`[OrderMatcher] Cannot SELL ${fillAmount} - only have ${currentSize} shares. Skipping fill.`);
+      return;
+    }
 
-    console.log(`[OrderMatcher] Updating trade ${trade.id.slice(0, 8)}... | old price: ${trade.price} -> new price: ${fillPrice}`);
+    const avgEntryPrice = parseFloat(position.avg_entry_price);
+    // PnL = (sell_price - avg_entry_price) * fillAmount
+    pnl = (fillPriceNum - avgEntryPrice) * fillAmount;
 
-    // Update trade with fill price and new total value
-    updateTradeStatus(trade.id, 'filled', {
-      pnl: '0',
-      price: fillPrice,
-      totalValue: newTotalValue,
+    // Update position: reduce size and add to realized PnL
+    const currentRealizedPnl = parseFloat(position.realized_pnl);
+    const newSize = Math.max(0, currentSize - fillAmount);
+    const newRealizedPnl = currentRealizedPnl + pnl;
+
+    updatePosition(botId, {
+      size: newSize.toFixed(6),
+      realizedPnl: newRealizedPnl.toFixed(6),
+      // Reset avg entry price if position is closed
+      avgEntryPrice: newSize <= 0.000001 ? '0' : position.avg_entry_price,
     });
 
-    console.log(
-      `[OrderMatcher] Trade ${trade.id} filled @ ${fillPrice} (was ${trade.price}) for order ${orderId}`
-    );
+    console.log(`[OrderMatcher] SELL fill: ${fillAmount} @ ${fillPrice} | PnL: ${pnl.toFixed(4)} | Position: ${currentSize} -> ${newSize}`);
   } else {
-    console.warn(`[OrderMatcher] No pending trade found for orderId ${orderId}`);
+    // BUY: increase size and update avg entry price
+    const currentSize = parseFloat(position.size);
+    const currentAvgPrice = parseFloat(position.avg_entry_price);
+    const newSize = currentSize + fillAmount;
+
+    // Calculate new weighted average entry price
+    const totalCost = (currentSize * currentAvgPrice) + (fillAmount * fillPriceNum);
+    const newAvgPrice = newSize > 0 ? totalCost / newSize : fillPriceNum;
+
+    updatePosition(botId, {
+      size: newSize.toFixed(6),
+      avgEntryPrice: newAvgPrice.toFixed(6),
+    });
+
+    console.log(`[OrderMatcher] BUY fill: ${fillAmount} @ ${fillPrice} | Position: ${currentSize} -> ${newSize} @ avg ${newAvgPrice.toFixed(4)}`);
+  }
+
+  // Only update trade record when order is fully filled
+  if (isFullyFilled) {
+    // Find the pending trade associated with this order
+    const pendingTrades = getTrades({
+      botId,
+      status: 'pending',
+    });
+
+    const trade = pendingTrades.find((t) => t.order_id === orderId);
+
+    if (trade) {
+      // Use totalFilledQuantity as the actual traded quantity (may differ from original order quantity for partial fills)
+      const actualQuantity = totalFilledQuantity;
+      const newTotalValue = (fillPriceNum * actualQuantity).toFixed(6);
+
+      // For SELL trades, calculate total PnL for the whole trade
+      let tradePnl = '0';
+      if (orderSide === 'SELL') {
+        // Use the PnL from position's realized PnL change
+        // This is approximate since price may vary across partial fills
+        const avgEntryPrice = parseFloat(position.avg_entry_price);
+        tradePnl = ((fillPriceNum - avgEntryPrice) * actualQuantity).toFixed(6);
+      }
+
+      // Mark trade as filled with actual filled quantity
+      updateTradeStatus(trade.id, 'filled', {
+        pnl: tradePnl,
+        price: fillPrice,
+        totalValue: newTotalValue,
+        quantity: actualQuantity.toFixed(6),
+      });
+
+      console.log(`[OrderMatcher] Trade ${trade.id.slice(0, 8)}... fully filled: ${actualQuantity} @ ${fillPrice} | PnL: ${tradePnl}`);
+    } else {
+      console.warn(`[OrderMatcher] No pending trade found for orderId ${orderId}`);
+    }
   }
 }
 
@@ -169,4 +254,69 @@ export function processTradeForBotFills(
 export function wouldOrderFill(order: LimitOrderRow, tradePrice: number): boolean {
   const orderPrice = parseFloat(order.price);
   return checkPriceCrossing(order.side, tradePrice, orderPrice);
+}
+
+/**
+ * Fill pending orders that are marketable against the current order book
+ *
+ * @param botId - The bot ID to check orders for
+ * @param orderBook - Current order book
+ * @returns Array of fill results
+ */
+export function fillMarketableOrders(
+  botId: string,
+  orderBook: OrderBook | null
+): FillResult[] {
+  if (!orderBook) return [];
+
+  const fills: FillResult[] = [];
+  const openOrders = getOpenOrdersByBotId(botId);
+
+  const bids = orderBook.bids || [];
+  const asks = orderBook.asks || [];
+
+  if (bids.length === 0 && asks.length === 0) return [];
+
+  const sortedBids = [...bids].sort((a, b) => parseFloat(b.price) - parseFloat(a.price));
+  const sortedAsks = [...asks].sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
+
+  const bestBid = sortedBids.length > 0 ? parseFloat(sortedBids[0].price) : 0;
+  const bestAsk = sortedAsks.length > 0 ? parseFloat(sortedAsks[0].price) : Infinity;
+
+  for (const order of openOrders) {
+    const orderPrice = parseFloat(order.price);
+    const remainingQty = parseFloat(order.quantity) - parseFloat(order.filled_quantity);
+
+    if (remainingQty <= 0) continue;
+
+    let shouldFill = false;
+    let fillPrice = '';
+
+    if (order.side === 'BUY' && bestAsk < Infinity && orderPrice >= bestAsk) {
+      shouldFill = true;
+      fillPrice = sortedAsks[0].price;
+    } else if (order.side === 'SELL' && bestBid > 0 && orderPrice <= bestBid) {
+      shouldFill = true;
+      fillPrice = sortedBids[0].price;
+    }
+
+    if (shouldFill) {
+      console.log(
+        `[OrderMatcher] Filling marketable ${order.side} @ ${orderPrice} against ${order.side === 'BUY' ? 'ask' : 'bid'} @ ${fillPrice}`
+      );
+
+      const syntheticTrade: LastTrade = {
+        asset_id: order.asset_id,
+        price: fillPrice,
+        size: remainingQty.toString(),
+        side: order.side === 'BUY' ? 'sell' : 'buy',
+        timestamp: new Date().toISOString(),
+      };
+
+      const orderFills = processTradeForFills(syntheticTrade);
+      fills.push(...orderFills.filter(f => f.orderId === order.id));
+    }
+  }
+
+  return fills;
 }

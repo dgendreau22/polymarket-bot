@@ -101,7 +101,7 @@ export function BotCard({ bot, onStateChange }: BotCardProps) {
                 pnl >= 0 ? "text-green-500" : "text-red-500"
               }`}
             >
-              ${pnl.toFixed(4)}
+              ${pnl.toFixed(2)}
             </span>
           </div>
         </div>
@@ -112,9 +112,9 @@ export function BotCard({ bot, onStateChange }: BotCardProps) {
         <span>Trades: {bot.metrics.totalTrades}</span>
         <span>
           Win:{" "}
-          {bot.metrics.totalTrades > 0
+          {(bot.metrics.winningTrades + bot.metrics.losingTrades) > 0
             ? (
-                (bot.metrics.winningTrades / bot.metrics.totalTrades) *
+                (bot.metrics.winningTrades / (bot.metrics.winningTrades + bot.metrics.losingTrades)) *
                 100
               ).toFixed(0)
             : 0}
