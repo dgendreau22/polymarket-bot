@@ -80,7 +80,7 @@ export function BotCard({ bot, onStateChange }: BotCardProps) {
         <div className="bg-muted/50 rounded p-2">
           <p className="text-xs text-muted-foreground">Position</p>
           <p className="font-medium">
-            {positionSize > 0 ? `${positionSize} YES` : "None"}
+            {positionSize > 0 ? `${positionSize.toFixed(2)} YES` : "None"}
           </p>
           {positionSize > 0 && (
             <p className="text-xs text-muted-foreground">

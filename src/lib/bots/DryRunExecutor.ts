@@ -68,6 +68,19 @@ export async function executeDryRunTrade(
     const side = signal.action as 'BUY' | 'SELL';
     const orderPrice = parseFloat(signal.price);
 
+    // Debug: log order book state at order creation
+    if (orderBook) {
+      const asks = orderBook.asks || [];
+      const bids = orderBook.bids || [];
+      const sortedAsks = [...asks].sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
+      const sortedBids = [...bids].sort((a, b) => parseFloat(b.price) - parseFloat(a.price));
+      const bestAsk = sortedAsks.length > 0 ? sortedAsks[0].price : 'none';
+      const bestBid = sortedBids.length > 0 ? sortedBids[0].price : 'none';
+      console.log(`[DryRun] Order creation: ${side} @ ${orderPrice} | OrderBook: bid=${bestBid}, ask=${bestAsk}`);
+    } else {
+      console.log(`[DryRun] Order creation: ${side} @ ${orderPrice} | OrderBook: NULL`);
+    }
+
     // Check if order is marketable (would fill immediately)
     const fillPrice = getMarketableFillPrice(side, orderPrice, orderBook || null);
     const isMarketable = fillPrice !== null;
@@ -86,48 +99,50 @@ export async function executeDryRunTrade(
 
     const limitOrder: LimitOrder = rowToLimitOrder(orderRow);
 
-    // Determine trade status and actual execution price
-    const actualPrice = isMarketable ? fillPrice : signal.price;
-    const status = isMarketable ? 'filled' : 'pending';
-
-    // If marketable, mark order as filled immediately
+    // For marketable orders, fill immediately and create a trade
     if (isMarketable) {
       updateOrderFill(orderId, signal.quantity, 'filled');
       console.log(
         `[DryRun] Marketable order filled immediately: ${side} ${signal.quantity} @ ${fillPrice} (limit was ${signal.price})`
       );
+
+      // Create trade record for immediate fill
+      const trade: Trade = {
+        id: tradeId,
+        botId: bot.id,
+        strategySlug: bot.strategySlug,
+        marketId: bot.marketId,
+        assetId: bot.assetId || '',
+        mode: 'dry_run',
+        side,
+        outcome: signal.side,
+        price: fillPrice,
+        quantity: signal.quantity,
+        totalValue: (parseFloat(fillPrice) * parseFloat(signal.quantity)).toFixed(6),
+        fee: '0',
+        pnl: '0',
+        status: 'filled',
+        orderId: orderId,
+        executedAt: now,
+        createdAt: now,
+      };
+
+      return {
+        success: true,
+        trade,
+        orderId,
+      };
     }
 
-    // Create trade record
-    const trade: Trade = {
-      id: tradeId,
-      botId: bot.id,
-      strategySlug: bot.strategySlug,
-      marketId: bot.marketId,
-      assetId: bot.assetId || '',
-      mode: 'dry_run',
-      side,
-      outcome: signal.side,
-      price: actualPrice,
-      quantity: signal.quantity,
-      totalValue: (parseFloat(actualPrice) * parseFloat(signal.quantity)).toFixed(6),
-      fee: '0',
-      pnl: '0',
-      status,
-      orderId: orderId,
-      executedAt: now,
-      createdAt: now,
-    };
-
-    if (!isMarketable) {
-      console.log(
-        `[DryRun] Order placed: ${trade.side} ${trade.quantity} ${trade.outcome} @ ${trade.price} | Order ID: ${orderId}`
-      );
-    }
+    // For non-marketable orders, only create the order (no trade yet)
+    // Trade records will be created by LimitOrderMatcher when the order fills
+    console.log(
+      `[DryRun] Order placed: ${side} ${signal.quantity} ${signal.side} @ ${signal.price} | Order ID: ${orderId}`
+    );
 
     return {
       success: true,
-      trade,
+      trade: undefined, // No trade until order fills
       orderId,
     };
   } catch (error) {

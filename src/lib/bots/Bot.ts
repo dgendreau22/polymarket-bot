@@ -187,6 +187,35 @@ export class Bot {
           this.currentPrice.yes = midPrice.toFixed(4);
           this.currentPrice.no = (1 - midPrice).toFixed(4);
           console.log(`[Bot ${this.id}] Price update: YES=${this.currentPrice.yes} (bid=${bestBid}, ask=${bestAsk})`);
+
+          // Update the current order book with latest best bid/ask for accurate marketable detection
+          // This ensures new orders are checked against the most recent prices
+          if (!this.currentOrderBook) {
+            // Create a minimal order book if none exists
+            this.currentOrderBook = {
+              market: '',
+              asset_id: this.config.assetId || '',
+              bids: [{ price: bestBid, size: '1000000' }],
+              asks: [{ price: bestAsk, size: '1000000' }],
+              timestamp: new Date().toISOString(),
+            };
+          } else {
+            // Update best bid/ask in existing order book
+            // Remove old best and add new best at the front
+            const existingBids = (this.currentOrderBook.bids || []).filter(b => parseFloat(b.price) < bid);
+            const existingAsks = (this.currentOrderBook.asks || []).filter(a => parseFloat(a.price) > ask);
+            this.currentOrderBook = {
+              ...this.currentOrderBook,
+              bids: [{ price: bestBid, size: '1000000' }, ...existingBids],
+              asks: [{ price: bestAsk, size: '1000000' }, ...existingAsks],
+            };
+          }
+
+          // Check for marketable orders on price changes
+          const marketableFills = fillMarketableOrders(this.id, this.currentOrderBook);
+          for (const fill of marketableFills) {
+            this.handleOrderFilled(fill);
+          }
         }
       });
 

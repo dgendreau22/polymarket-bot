@@ -288,11 +288,18 @@ class BotManager {
   // ============================================================================
 
   /**
-   * Get a bot by ID
+   * Get a bot by ID (returns BotInstance for UI consumption)
    */
   getBot(botId: string): BotInstance | undefined {
     const bot = this.bots.get(botId);
     return bot?.toInstance();
+  }
+
+  /**
+   * Get the raw Bot instance by ID (for event subscription)
+   */
+  getBotRaw(botId: string): Bot | undefined {
+    return this.bots.get(botId);
   }
 
   /**

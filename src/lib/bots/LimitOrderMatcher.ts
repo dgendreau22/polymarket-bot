@@ -9,14 +9,16 @@
 
 import type { LastTrade, OrderBook } from '../polymarket/types';
 import type { FillResult, LimitOrderRow } from './types';
-import { getOpenOrdersByBotId } from '../persistence/LimitOrderRepository';
 import {
+  getOpenOrdersByBotId,
   getOpenOrdersByAssetId,
+  getLimitOrderById,
   updateOrderFill,
   rowToLimitOrder,
 } from '../persistence/LimitOrderRepository';
-import { updateTradeStatus, getTrades } from '../persistence/TradeRepository';
+import { createTrade, updateTradeStatus, getTrades } from '../persistence/TradeRepository';
 import { getPosition, updatePosition, getOrCreatePosition, getBotById } from '../persistence/BotRepository';
+import { v4 as uuidv4 } from 'uuid';
 
 /**
  * Process a market trade to check for order fills
@@ -35,21 +37,46 @@ export function processTradeForFills(lastTrade: LastTrade): FillResult[] {
   console.log(`[OrderMatcher] Processing trade @ ${lastTrade.price} for asset ${lastTrade.asset_id?.slice(0, 8)}... | Found ${openOrders.length} open orders`);
 
   for (const order of openOrders) {
-    const orderPrice = parseFloat(order.price);
-    const orderQuantity = parseFloat(order.quantity);
-    const filledQuantity = parseFloat(order.filled_quantity);
+    // Get fresh order state from DB to prevent race conditions
+    const freshOrder = getLimitOrderById(order.id);
+    if (!freshOrder || freshOrder.status === 'filled' || freshOrder.status === 'cancelled') {
+      continue; // Order already filled or cancelled by another process
+    }
+
+    const orderPrice = parseFloat(freshOrder.price);
+    const orderQuantity = parseFloat(freshOrder.quantity);
+    const filledQuantity = parseFloat(freshOrder.filled_quantity);
     const remainingQuantity = orderQuantity - filledQuantity;
 
     // Check if trade price crosses order price
-    const shouldFill = checkPriceCrossing(order.side, tradePrice, orderPrice);
+    const shouldFill = checkPriceCrossing(freshOrder.side, tradePrice, orderPrice);
 
-    console.log(`[OrderMatcher] Order ${order.id.slice(0, 8)}... | ${order.side} @ ${orderPrice} | trade @ ${tradePrice} | shouldFill: ${shouldFill}`);
+    console.log(`[OrderMatcher] Order ${freshOrder.id.slice(0, 8)}... | ${freshOrder.side} @ ${orderPrice} | trade @ ${tradePrice} | shouldFill: ${shouldFill}`);
 
     if (shouldFill && remainingQuantity > 0) {
       // Calculate fill amount
       // For dry-run simulation, if trade size is 0 or unknown, fill the entire remaining order
       // (simulating infinite liquidity at the market price)
-      const fillAmount = tradeSize > 0 ? Math.min(tradeSize, remainingQuantity) : remainingQuantity;
+      let fillAmount = tradeSize > 0 ? Math.min(tradeSize, remainingQuantity) : remainingQuantity;
+
+      // For SELL orders, check if there's enough position to sell
+      if (freshOrder.side === 'SELL') {
+        const bot = getBotById(freshOrder.bot_id);
+        if (bot) {
+          const position = getOrCreatePosition(freshOrder.bot_id, bot.market_id, freshOrder.asset_id);
+          const currentSize = parseFloat(position.size);
+          if (currentSize <= 0) {
+            console.log(`[OrderMatcher] Skipping SELL fill - no position to sell`);
+            continue;
+          }
+          // Only fill up to available position
+          if (fillAmount > currentSize) {
+            console.log(`[OrderMatcher] Limiting SELL fill from ${fillAmount} to ${currentSize} (position limit)`);
+            fillAmount = currentSize;
+          }
+        }
+      }
+
       const newFilledQuantity = filledQuantity + fillAmount;
       const newRemainingQuantity = orderQuantity - newFilledQuantity;
       const isFullyFilled = newRemainingQuantity <= 0.000001; // Tolerance for floating point
@@ -57,28 +84,33 @@ export function processTradeForFills(lastTrade: LastTrade): FillResult[] {
       // Determine new order status
       const newStatus = isFullyFilled ? 'filled' : 'partially_filled';
 
-      // Update order in database
-      updateOrderFill(order.id, newFilledQuantity.toFixed(6), newStatus);
+      // Update position and trade for this fill FIRST
+      const tradeCreated = updateTradeForOrderFill(freshOrder.id, freshOrder.bot_id, freshOrder.asset_id, lastTrade.price, fillAmount, isFullyFilled, freshOrder.side, newFilledQuantity);
 
-      // Update position and trade for this fill
-      updateTradeForOrderFill(order.id, order.bot_id, order.asset_id, lastTrade.price, fillAmount, isFullyFilled, order.side, newFilledQuantity);
+      // Only update order if trade was created successfully
+      if (tradeCreated) {
+        updateOrderFill(freshOrder.id, newFilledQuantity.toFixed(6), newStatus);
+      } else {
+        console.warn(`[OrderMatcher] Trade not created for order ${freshOrder.id.slice(0, 8)}..., skipping order update`);
+        continue;
+      }
 
       // Create fill result
       const fillResult: FillResult = {
-        orderId: order.id,
-        botId: order.bot_id,
+        orderId: freshOrder.id,
+        botId: freshOrder.bot_id,
         filledQuantity: fillAmount.toFixed(6),
         remainingQuantity: newRemainingQuantity.toFixed(6),
         fillPrice: lastTrade.price,
         isFullyFilled,
-        side: order.side,
-        outcome: order.outcome,
+        side: freshOrder.side,
+        outcome: freshOrder.outcome,
       };
 
       fills.push(fillResult);
 
       console.log(
-        `[OrderMatcher] Order ${order.id} ${isFullyFilled ? 'filled' : 'partially filled'}: ` +
+        `[OrderMatcher] Order ${freshOrder.id} ${isFullyFilled ? 'filled' : 'partially filled'}: ` +
           `${fillAmount.toFixed(4)} @ ${lastTrade.price} | ` +
           `Remaining: ${newRemainingQuantity.toFixed(4)}`
       );
@@ -134,14 +166,14 @@ function updateTradeForOrderFill(
   isFullyFilled: boolean,
   orderSide: 'BUY' | 'SELL',
   totalFilledQuantity: number
-): void {
+): boolean {
   const fillPriceNum = parseFloat(fillPrice);
 
   // Get or create position - this ensures position exists for first trade
   const bot = getBotById(botId);
   if (!bot) {
     console.warn(`[OrderMatcher] Bot not found: ${botId}`);
-    return;
+    return false;
   }
 
   const position = getOrCreatePosition(botId, bot.market_id, assetId);
@@ -152,7 +184,7 @@ function updateTradeForOrderFill(
     // Safety check: can't sell more than current position
     if (currentSize < fillAmount) {
       console.warn(`[OrderMatcher] Cannot SELL ${fillAmount} - only have ${currentSize} shares. Skipping fill.`);
-      return;
+      return false;
     }
 
     const avgEntryPrice = parseFloat(position.avg_entry_price);
@@ -190,43 +222,55 @@ function updateTradeForOrderFill(
     console.log(`[OrderMatcher] BUY fill: ${fillAmount} @ ${fillPrice} | Position: ${currentSize} -> ${newSize} @ avg ${newAvgPrice.toFixed(4)}`);
   }
 
-  // Only update trade record when order is fully filled
+  // Create a new filled trade record for THIS fill event (partial or full)
+  const order = getLimitOrderById(orderId);
+  if (!order) {
+    console.warn(`[OrderMatcher] Order not found: ${orderId}`);
+    return;
+  }
+
+  const totalValue = (fillPriceNum * fillAmount).toFixed(6);
+  const now = new Date();
+
+  // Create filled trade record for this fill
+  const fillTrade = createTrade({
+    id: uuidv4(),
+    botId,
+    strategySlug: bot.strategy_slug,
+    marketId: bot.market_id,
+    assetId,
+    mode: bot.mode as 'dry_run' | 'live',
+    side: orderSide,
+    outcome: order.outcome,
+    price: fillPrice,
+    quantity: fillAmount.toFixed(6),
+    totalValue,
+    fee: '0',
+    pnl: pnl.toFixed(6),
+    status: 'filled',
+    orderId,
+    executedAt: now,
+    createdAt: now,
+  });
+
+  console.log(`[OrderMatcher] Fill trade created: ${orderSide} ${fillAmount} @ ${fillPrice} | PnL: ${pnl.toFixed(4)} | Trade ID: ${fillTrade.id.slice(0, 8)}...`);
+
+  // If order is now fully filled, cancel the original pending trade (if any)
   if (isFullyFilled) {
-    // Find the pending trade associated with this order
     const pendingTrades = getTrades({
       botId,
       status: 'pending',
     });
 
-    const trade = pendingTrades.find((t) => t.order_id === orderId);
-
-    if (trade) {
-      // Use totalFilledQuantity as the actual traded quantity (may differ from original order quantity for partial fills)
-      const actualQuantity = totalFilledQuantity;
-      const newTotalValue = (fillPriceNum * actualQuantity).toFixed(6);
-
-      // For SELL trades, calculate total PnL for the whole trade
-      let tradePnl = '0';
-      if (orderSide === 'SELL') {
-        // Use the PnL from position's realized PnL change
-        // This is approximate since price may vary across partial fills
-        const avgEntryPrice = parseFloat(position.avg_entry_price);
-        tradePnl = ((fillPriceNum - avgEntryPrice) * actualQuantity).toFixed(6);
-      }
-
-      // Mark trade as filled with actual filled quantity
-      updateTradeStatus(trade.id, 'filled', {
-        pnl: tradePnl,
-        price: fillPrice,
-        totalValue: newTotalValue,
-        quantity: actualQuantity.toFixed(6),
-      });
-
-      console.log(`[OrderMatcher] Trade ${trade.id.slice(0, 8)}... fully filled: ${actualQuantity} @ ${fillPrice} | PnL: ${tradePnl}`);
-    } else {
-      console.warn(`[OrderMatcher] No pending trade found for orderId ${orderId}`);
+    const pendingTrade = pendingTrades.find((t) => t.order_id === orderId);
+    if (pendingTrade) {
+      // Mark the pending trade as cancelled since we've created individual fill records
+      updateTradeStatus(pendingTrade.id, 'cancelled', {});
+      console.log(`[OrderMatcher] Pending trade ${pendingTrade.id.slice(0, 8)}... cancelled (replaced by fill records)`);
     }
   }
+
+  return true;
 }
 
 /**
@@ -257,6 +301,94 @@ export function wouldOrderFill(order: LimitOrderRow, tradePrice: number): boolea
 }
 
 /**
+ * Fill a single specific order
+ *
+ * @param order - The order to fill (used for ID lookup)
+ * @param fillPrice - The price to fill at
+ * @param fillAmount - The amount to fill
+ * @returns FillResult if filled, null otherwise
+ */
+function fillSingleOrder(
+  order: LimitOrderRow,
+  fillPrice: string,
+  fillAmount: number
+): FillResult | null {
+  // Get fresh order state from DB to prevent race conditions
+  const freshOrder = getLimitOrderById(order.id);
+  if (!freshOrder || freshOrder.status === 'filled' || freshOrder.status === 'cancelled') {
+    return null; // Order already filled or cancelled by another process
+  }
+
+  const orderQuantity = parseFloat(freshOrder.quantity);
+  const filledQuantity = parseFloat(freshOrder.filled_quantity);
+  const remainingQuantity = orderQuantity - filledQuantity;
+
+  if (remainingQuantity <= 0) return null;
+
+  let actualFillAmount = Math.min(fillAmount, remainingQuantity);
+
+  // For SELL orders, check if there's enough position
+  if (freshOrder.side === 'SELL') {
+    const bot = getBotById(freshOrder.bot_id);
+    if (bot) {
+      const position = getOrCreatePosition(freshOrder.bot_id, bot.market_id, freshOrder.asset_id);
+      const currentSize = parseFloat(position.size);
+      if (currentSize <= 0) {
+        console.log(`[OrderMatcher] Skipping SELL fill - no position to sell`);
+        return null;
+      }
+      if (actualFillAmount > currentSize) {
+        console.log(`[OrderMatcher] Limiting SELL fill from ${actualFillAmount} to ${currentSize} (position limit)`);
+        actualFillAmount = currentSize;
+      }
+    }
+  }
+
+  const newFilledQuantity = filledQuantity + actualFillAmount;
+  const newRemainingQuantity = orderQuantity - newFilledQuantity;
+  const isFullyFilled = newRemainingQuantity <= 0.000001;
+
+  const newStatus = isFullyFilled ? 'filled' : 'partially_filled';
+
+  // Update position and trade for this fill FIRST
+  const tradeCreated = updateTradeForOrderFill(
+    freshOrder.id,
+    freshOrder.bot_id,
+    freshOrder.asset_id,
+    fillPrice,
+    actualFillAmount,
+    isFullyFilled,
+    freshOrder.side,
+    newFilledQuantity
+  );
+
+  // Only update order if trade was created successfully
+  if (!tradeCreated) {
+    console.warn(`[OrderMatcher] Trade not created for order ${freshOrder.id.slice(0, 8)}..., skipping`);
+    return null;
+  }
+
+  updateOrderFill(freshOrder.id, newFilledQuantity.toFixed(6), newStatus);
+
+  console.log(
+    `[OrderMatcher] Order ${freshOrder.id.slice(0, 8)}... ${isFullyFilled ? 'filled' : 'partially filled'}: ` +
+      `${actualFillAmount.toFixed(4)} @ ${fillPrice} | ` +
+      `Remaining: ${newRemainingQuantity.toFixed(4)}`
+  );
+
+  return {
+    orderId: freshOrder.id,
+    botId: freshOrder.bot_id,
+    filledQuantity: actualFillAmount.toFixed(6),
+    remainingQuantity: newRemainingQuantity.toFixed(6),
+    fillPrice,
+    isFullyFilled,
+    side: freshOrder.side,
+    outcome: freshOrder.outcome,
+  };
+}
+
+/**
  * Fill pending orders that are marketable against the current order book
  *
  * @param botId - The bot ID to check orders for
@@ -270,7 +402,6 @@ export function fillMarketableOrders(
   if (!orderBook) return [];
 
   const fills: FillResult[] = [];
-  const openOrders = getOpenOrdersByBotId(botId);
 
   const bids = orderBook.bids || [];
   const asks = orderBook.asks || [];
@@ -283,7 +414,12 @@ export function fillMarketableOrders(
   const bestBid = sortedBids.length > 0 ? parseFloat(sortedBids[0].price) : 0;
   const bestAsk = sortedAsks.length > 0 ? parseFloat(sortedAsks[0].price) : Infinity;
 
-  for (const order of openOrders) {
+  // Re-fetch open orders each iteration to get fresh state
+  // This prevents race conditions where orders are filled by other processes
+  let openOrders = getOpenOrdersByBotId(botId);
+
+  for (let i = 0; i < openOrders.length; i++) {
+    const order = openOrders[i];
     const orderPrice = parseFloat(order.price);
     const remainingQty = parseFloat(order.quantity) - parseFloat(order.filled_quantity);
 
@@ -305,16 +441,14 @@ export function fillMarketableOrders(
         `[OrderMatcher] Filling marketable ${order.side} @ ${orderPrice} against ${order.side === 'BUY' ? 'ask' : 'bid'} @ ${fillPrice}`
       );
 
-      const syntheticTrade: LastTrade = {
-        asset_id: order.asset_id,
-        price: fillPrice,
-        size: remainingQty.toString(),
-        side: order.side === 'BUY' ? 'sell' : 'buy',
-        timestamp: new Date().toISOString(),
-      };
+      // Fill this specific order only (not all matching orders)
+      const fill = fillSingleOrder(order, fillPrice, remainingQty);
+      if (fill) {
+        fills.push(fill);
+      }
 
-      const orderFills = processTradeForFills(syntheticTrade);
-      fills.push(...orderFills.filter(f => f.orderId === order.id));
+      // Re-fetch orders to get fresh state for next iteration
+      openOrders = getOpenOrdersByBotId(botId);
     }
   }
 

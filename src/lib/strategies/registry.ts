@@ -120,8 +120,7 @@ export class MarketMakerExecutor implements IStrategyExecutor {
   }
 
   async execute(context: StrategyContext): Promise<StrategySignal | null> {
-    // This is a simplified version - the full implementation is in market-maker.ts
-    const { position, currentPrice, bot, tickSize, pendingBuyQuantity = 0 } = context;
+    const { position, currentPrice, bot, tickSize, pendingBuyQuantity = 0, orderBook } = context;
     const config = (bot.config.strategyConfig || {}) as Record<string, unknown>;
 
     const spread = (config.spread as number) || 0.02;
@@ -132,41 +131,65 @@ export class MarketMakerExecutor implements IStrategyExecutor {
     // Get tick size (default to 0.01 if not available)
     const tick = tickSize ? parseFloat(tickSize.tick_size) : 0.01;
 
-    // Use the actual current price of the outcome being traded
-    const basePrice = outcome === 'YES' ? parseFloat(currentPrice.yes) : parseFloat(currentPrice.no);
+    // Extract best bid/ask from order book (required for non-marketable order placement)
+    const bids = orderBook?.bids || [];
+    const asks = orderBook?.asks || [];
+
+    if (bids.length === 0 || asks.length === 0) {
+      // No order book data, skip this cycle
+      return null;
+    }
+
+    const bestBid = parseFloat(bids[0].price);
+    const bestAsk = parseFloat(asks[0].price);
+
+    // Use mid-price only for position value calculation
+    const midPrice = (bestBid + bestAsk) / 2;
     const positionSize = parseFloat(position.size);
 
     // Calculate position value in USDC
-    // Position value = shares * current price
-    const positionValueUsd = positionSize * basePrice;
-    const pendingBuyValueUsd = pendingBuyQuantity * basePrice;
+    const positionValueUsd = positionSize * midPrice;
+    const pendingBuyValueUsd = pendingBuyQuantity * midPrice;
     const effectiveValueUsd = positionValueUsd + pendingBuyValueUsd;
 
-    // Simple position-based signal
     // Only place BUY if effective position value (in USDC) is below maxPosition
     if (effectiveValueUsd < maxPositionUsd) {
-      // Place bid slightly below current price, rounded to tick
-      const bidPrice = this.roundToTick(basePrice * (1 - spread / 2), tick);
+      // Place bid BELOW best bid (providing liquidity, not taking it)
+      const bidPrice = this.roundToTick(bestBid * (1 - spread / 2), tick);
+
+      // Safety check: ensure order is not marketable
+      if (parseFloat(bidPrice) >= bestAsk) {
+        console.warn(`[MM] Skipping BUY - price ${bidPrice} would be marketable (ask=${bestAsk})`);
+        return null;
+      }
+
       return {
         action: 'BUY',
         side: outcome,
         price: bidPrice,
         quantity: orderSize,
-        reason: `Market making - bid @ ${bidPrice} (value: $${positionValueUsd.toFixed(2)}, pending: $${pendingBuyValueUsd.toFixed(2)}, max: $${maxPositionUsd})`,
+        reason: `Market making - bid @ ${bidPrice} (bestBid=${bestBid}, value: $${positionValueUsd.toFixed(2)}, max: $${maxPositionUsd})`,
         confidence: 0.8,
       };
     }
 
     // Place SELL if we have position to sell
     if (positionSize > 0) {
-      // Place ask slightly above current price, rounded to tick
-      const askPrice = this.roundToTick(basePrice * (1 + spread / 2), tick);
+      // Place ask ABOVE best ask (providing liquidity, not taking it)
+      const askPrice = this.roundToTick(bestAsk * (1 + spread / 2), tick);
+
+      // Safety check: ensure order is not marketable
+      if (parseFloat(askPrice) <= bestBid) {
+        console.warn(`[MM] Skipping SELL - price ${askPrice} would be marketable (bid=${bestBid})`);
+        return null;
+      }
+
       return {
         action: 'SELL',
         side: outcome,
         price: askPrice,
         quantity: orderSize,
-        reason: `Market making - providing ask liquidity @ ${askPrice}`,
+        reason: `Market making - ask @ ${askPrice} (bestAsk=${bestAsk})`,
         confidence: 0.8,
       };
     }

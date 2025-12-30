@@ -15,6 +15,14 @@ interface AggregatedTrade extends Omit<Trade, 'id'> {
   count: number;
 }
 
+// Safely parse date from various formats (Date object, ISO string, or timestamp)
+function safeParseDate(value: Date | string | number | undefined | null): Date {
+  if (!value) return new Date();
+  if (value instanceof Date) return value;
+  const parsed = new Date(value);
+  return isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
 // Aggregate trades that happen at the same time (same second), price, side, and outcome
 function aggregateTrades(trades: Trade[]): AggregatedTrade[] {
   const aggregated: AggregatedTrade[] = [];
@@ -22,7 +30,8 @@ function aggregateTrades(trades: Trade[]): AggregatedTrade[] {
 
   for (const trade of trades) {
     // Create key from time (truncated to second), side, outcome, price
-    const timeKey = format(new Date(trade.executedAt), "yyyy-MM-dd HH:mm:ss");
+    const tradeDate = safeParseDate(trade.executedAt);
+    const timeKey = format(tradeDate, "yyyy-MM-dd HH:mm:ss");
     const key = `${timeKey}-${trade.side}-${trade.outcome}-${trade.price}`;
 
     const existingIndex = seen.get(key);
@@ -85,7 +94,7 @@ export function TradesTable({ trades, showBotName = false, formatPrice }: Trades
             return (
               <tr key={trade.id} className="border-b last:border-0">
                 <td className="py-1.5 pr-2 text-muted-foreground text-xs truncate">
-                  {format(new Date(trade.executedAt), "HH:mm:ss")}
+                  {format(safeParseDate(trade.executedAt), "HH:mm:ss")}
                 </td>
                 {showBotName && (
                   <td className="py-1.5 pr-2 truncate max-w-[100px]">

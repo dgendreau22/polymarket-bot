@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -171,47 +171,41 @@ export default function BotDetailPage() {
     });
   }, [orderSortColumn, orderSortDirection]);
 
+  // SSE connection state
+  const [sseConnected, setSseConnected] = useState(false);
+
+  // Fetch strategy info (only needs to be done once)
+  const fetchStrategy = useCallback(async (strategySlug: string) => {
+    try {
+      const strategyRes = await fetch(`/api/strategies/${strategySlug}`);
+      const strategyData = await strategyRes.json();
+      if (strategyData.success) {
+        setStrategy(strategyData.data.strategy);
+      }
+    } catch (err) {
+      console.error("Failed to fetch strategy:", err);
+    }
+  }, []);
+
+  // Initial data fetch (fallback and strategy load)
   const fetchData = useCallback(async () => {
     try {
-      // Fetch bot, trades, and active orders in parallel
-      // Only fetch filled trades for Recent Trades section (pending trades have order prices, not fill prices)
-      const [botRes, tradesRes, ordersRes] = await Promise.all([
-        fetch(`/api/bots/${id}`),
-        fetch(`/api/trades?botId=${id}&limit=50&status=filled`),
-        fetch(`/api/bots/${id}/orders`),
-      ]);
-
+      const botRes = await fetch(`/api/bots/${id}`);
       const botData = await botRes.json();
-      const tradesData = await tradesRes.json();
-      const ordersData = await ordersRes.json();
 
       if (botData.success) {
         setBot(botData.data);
         setError(null);
-
-        // Fetch strategy info for description and parameters
-        const strategyRes = await fetch(`/api/strategies/${botData.data.config.strategySlug}`);
-        const strategyData = await strategyRes.json();
-        if (strategyData.success) {
-          setStrategy(strategyData.data.strategy);
-        }
+        fetchStrategy(botData.data.config.strategySlug);
       } else {
         setError(botData.error || "Failed to fetch bot");
-      }
-
-      if (tradesData.success) {
-        setTrades(tradesData.data);
-      }
-
-      if (ordersData.success) {
-        setActiveOrders(ordersData.data);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch bot");
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, fetchStrategy]);
 
   const cancelAllOrders = async () => {
     setCancellingOrders(true);
@@ -220,7 +214,6 @@ export default function BotDetailPage() {
       const data = await res.json();
       if (data.success) {
         setActiveOrders([]);
-        fetchData();
       }
     } catch (err) {
       console.error("Failed to cancel orders:", err);
@@ -229,11 +222,80 @@ export default function BotDetailPage() {
     }
   };
 
+  // Track if strategy has been fetched to avoid re-fetching
+  const strategyFetchedRef = useRef(false);
+
+  // SSE connection for real-time updates (no polling!)
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
-  }, [fetchData]);
+    // Connect to SSE endpoint
+    const eventSource = new EventSource(`/api/bots/${id}/events`);
+
+    eventSource.onopen = () => {
+      console.log("[SSE] Connected to bot events");
+      setSseConnected(true);
+    };
+
+    eventSource.onerror = (err) => {
+      console.error("[SSE] Connection error:", err);
+      setSseConnected(false);
+      // On error, fall back to fetching data directly
+      fetchData();
+    };
+
+    // Handle bot state updates
+    eventSource.addEventListener("bot", (e) => {
+      try {
+        const botData = JSON.parse(e.data);
+        setBot(botData);
+        setLoading(false);
+        setError(null);
+
+        // Fetch strategy once
+        if (!strategyFetchedRef.current && botData.config?.strategySlug) {
+          strategyFetchedRef.current = true;
+          fetchStrategy(botData.config.strategySlug);
+        }
+      } catch (err) {
+        console.error("[SSE] Failed to parse bot data:", err);
+      }
+    });
+
+    // Handle trades updates
+    eventSource.addEventListener("trades", (e) => {
+      try {
+        const tradesData = JSON.parse(e.data);
+        setTrades(tradesData);
+      } catch (err) {
+        console.error("[SSE] Failed to parse trades data:", err);
+      }
+    });
+
+    // Handle orders updates
+    eventSource.addEventListener("orders", (e) => {
+      try {
+        const ordersData = JSON.parse(e.data);
+        setActiveOrders(ordersData);
+      } catch (err) {
+        console.error("[SSE] Failed to parse orders data:", err);
+      }
+    });
+
+    // Handle bot events (for logging/debugging)
+    eventSource.addEventListener("event", (e) => {
+      try {
+        const event = JSON.parse(e.data);
+        console.log("[SSE] Bot event:", event.type);
+      } catch (err) {
+        console.error("[SSE] Failed to parse event:", err);
+      }
+    });
+
+    // Cleanup on unmount
+    return () => {
+      console.log("[SSE] Closing connection");
+      eventSource.close();
+    };
+  }, [id, fetchData, fetchStrategy]); // Removed 'strategy' from deps to prevent reconnection
 
   // Fetch order book data
   const fetchOrderBook = useCallback(async (assetId: string) => {
@@ -910,21 +972,12 @@ export default function BotDetailPage() {
                       </span>
                     </th>
                     <th
-                      className="text-right py-2 px-1 cursor-pointer hover:text-foreground select-none w-[50px] bg-card"
+                      className="text-right py-2 px-1 cursor-pointer hover:text-foreground select-none w-[70px] bg-card"
                       onClick={() => handleOrderSort('quantity')}
                     >
                       <span className="inline-flex items-center gap-0.5 justify-end">
-                        Qty
+                        Remaining
                         {orderSortColumn === 'quantity' && (orderSortDirection === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
-                      </span>
-                    </th>
-                    <th
-                      className="text-right py-2 px-1 cursor-pointer hover:text-foreground select-none w-[70px] bg-card"
-                      onClick={() => handleOrderSort('filled')}
-                    >
-                      <span className="inline-flex items-center gap-0.5 justify-end">
-                        Fill
-                        {orderSortColumn === 'filled' && (orderSortDirection === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
                       </span>
                     </th>
                     <th
@@ -948,9 +1001,6 @@ export default function BotDetailPage() {
                 </thead>
                 <tbody>
                   {sortOrders(aggregateOrders(activeOrders)).map((order) => {
-                    const fillPercent = order.totalQuantity > 0
-                      ? (order.totalFilled / order.totalQuantity) * 100
-                      : 0;
                     return (
                       <tr key={`${order.price}-${order.side}-${order.outcome}`} className="border-b border-muted last:border-0">
                         <td className="py-1.5 px-1">
@@ -979,11 +1029,11 @@ export default function BotDetailPage() {
                         <td className="py-1.5 px-1 text-right font-mono">
                           {formatPrice(order.price)}
                         </td>
-                        <td className="py-1.5 px-1 text-right font-mono">
-                          {order.totalQuantity.toFixed(1)}
-                        </td>
-                        <td className="py-1.5 px-1 text-right font-mono text-muted-foreground text-xs">
-                          {fillPercent.toFixed(0)}%
+                        <td className="py-1.5 px-1 text-right font-mono text-xs">
+                          <span className={order.totalFilled > 0 ? "text-yellow-500" : ""}>
+                            {(order.totalQuantity - order.totalFilled).toFixed(0)}
+                          </span>
+                          <span className="text-muted-foreground">/{order.totalQuantity.toFixed(0)}</span>
                         </td>
                         <td className="py-1.5 px-1">
                           <span

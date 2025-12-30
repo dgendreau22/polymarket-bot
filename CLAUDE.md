@@ -2,6 +2,23 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Product Requirements
+
+### Objective
+
+Generate consistent revenue from crypto markets by extracting value from market inefficiencies. The system connects to market APIs and automates trading by sending buy and sell orders. Currently targeted at prediction markets (Polymarket).
+
+### Target Audience
+
+Small proprietary trading businesses seeking automated trading solutions for prediction markets.
+
+### User Stories
+
+- **Market Discovery**: As a trader, I want to browse, search, and scan for potential markets so that I can identify trading opportunities.
+- **Bot Creation**: As a trader, I want to create bots using specialized strategies (arbitrage, market making, trend trading, etc.) on specific markets so that I can automate my trading.
+- **Monitoring**: As a trader, I want to track and monitor the progress of all my bots in real-time so that I can ensure they are performing as expected.
+- **Analytics**: As a trader, I want statistics to be tracked and analyzed so that I can improve bot performance over time.
+
 ## Commands
 
 ```bash
