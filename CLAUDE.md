@@ -40,12 +40,12 @@ Next.js 16 App Router application with React 19, TypeScript, Tailwind CSS v4, an
 - `types.ts` - Type definitions for markets, orders, positions, and strategy configs
 
 **`src/lib/bots/`** - Bot Testing Framework:
-- `Bot.ts` - Core bot class with state machine (running/paused/stopped), fetches prices directly from CLOB API, WebSocket subscriptions for real-time price/order book updates, infers tick size from order book prices, exposes `getOrderBook()` for marketable order detection
+- `Bot.ts` - Core bot class with state machine (running/paused/stopped), fetches prices directly from CLOB API, WebSocket subscriptions for real-time price/order book updates, infers tick size from order book prices, exposes `getOrderBook()` for marketable order detection. Includes market status monitoring that auto-stops bot when market closes.
 - `BotManager.ts` - Singleton orchestrating bot lifecycle, persistence, and trade execution. Uses `globalThis` for Next.js hot reload persistence. `updateBotPosition()` syncs in-memory state with database
-- `DryRunExecutor.ts` - Simulates trades without real execution (for testing). `getMarketableFillPrice()` detects orders that cross the spread and fills them immediately at creation
+- `DryRunExecutor.ts` - Simulates trades without real execution (for testing). `getMarketableFillPrice()` detects orders that cross the spread and fills them immediately at creation. Uses correct asset ID for YES vs NO trades.
 - `LimitOrderMatcher.ts` - Processes trades to fill limit orders. `fillMarketableOrders()` checks pending orders against order book each execution cycle to fill orders that become marketable
 - `LiveExecutor.ts` - Executes real trades via ClobClient
-- `types.ts` - Type definitions for BotConfig, BotInstance, Trade, StrategySignal, FillResult, etc.
+- `types.ts` - Type definitions for BotConfig, BotInstance, Trade, StrategySignal, FillResult, ArbitragePosition, etc. Includes `yesPendingBuy`/`noPendingBuy` for per-asset order tracking.
 
 **`src/lib/strategies/`** - Strategy System:
 - `StrategyLoader.ts` - Parses markdown strategy files from `src/strategies/*.md` on-demand (no caching)
@@ -153,6 +153,39 @@ Each `.md` file contains: frontmatter (name, version, author), description, algo
 - Orders that become marketable due to market movement fill automatically
 - Fills update position, create trade records, and calculate PnL
 
+### Market Auto-Close Detection
+
+Bots automatically detect when their market closes or expires:
+- Checks Gamma API every 60 seconds for market status (`closed`, `active`, `endDateIso`)
+- When market closes: cancels all pending orders, emits ERROR event, auto-stops bot
+- Useful for short-term markets (e.g., "Bitcoin up or down in 15 minutes")
+- API errors don't stop the bot (graceful degradation)
+
+### Arbitrage Strategy
+
+The arbitrage strategy (`registry.ts` ArbitrageExecutor) accumulates both YES and NO positions to profit from combined cost < $1:
+
+**Dual-Asset Tracking:**
+- Bots store both `assetId` (YES) and `noAssetId` (NO) in config
+- Separate order books tracked for each asset
+- Positions tracked per-outcome in unified `positions` table
+
+**Position Limit Enforcement (`maxPosition`):**
+- Limits the DIFFERENCE between YES and NO leg sizes, not absolute size
+- Checks BOTH filled difference AND total difference (filled + pending)
+- Prevents one leg from growing unchecked while the other has unfilled orders
+- Example: If YES=100, NO=50 (diff=50), and maxPosition=100, can still buy either leg
+
+**Per-Asset Pending Order Tracking:**
+- `yesPendingBuy` / `noPendingBuy` in StrategyContext
+- Ensures position limits account for orders not yet filled
+- Prevents exceeding limits when pending orders fill
+
+**Entry Logic:**
+- Buys when ask price < target (default: 0.48 for 2% profit margin)
+- Prioritizes lagging leg to maintain balance
+- Aggressive mode: crosses spread when imbalance exceeds threshold
+
 ### Components
 
 **`src/components/bots/`:**
@@ -168,10 +201,10 @@ Each `.md` file contains: frontmatter (name, version, author), description, algo
 SQLite database stored at `data/polymarket-bot.db` (or `DATABASE_PATH` env var).
 
 **Tables:**
-- `bots` - Bot configurations and state
+- `bots` - Bot configurations and state (includes `no_asset_id` for arbitrage)
 - `trades` - Trade history with PnL tracking
-- `positions` - Bot positions
-- `limit_orders` - Pending limit orders with fill status
+- `positions` - Bot positions (unified table supporting YES/NO outcomes per bot)
+- `limit_orders` - Pending limit orders with fill status and outcome tracking
 
 ### Environment Variables
 
