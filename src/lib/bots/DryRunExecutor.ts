@@ -85,11 +85,14 @@ export async function executeDryRunTrade(
     const fillPrice = getMarketableFillPrice(side, orderPrice, orderBook || null);
     const isMarketable = fillPrice !== null;
 
+    // Determine correct asset ID based on signal side (YES or NO)
+    const assetId = signal.side === 'YES' ? (bot.assetId || '') : (bot.noAssetId || bot.assetId || '');
+
     // Create limit order in database
     const orderRow = createLimitOrder({
       id: orderId,
       botId: bot.id,
-      assetId: bot.assetId || '',
+      assetId,
       side,
       outcome: signal.side,
       price: signal.price,
@@ -112,7 +115,7 @@ export async function executeDryRunTrade(
         botId: bot.id,
         strategySlug: bot.strategySlug,
         marketId: bot.marketId,
-        assetId: bot.assetId || '',
+        assetId,
         mode: 'dry_run',
         side,
         outcome: signal.side,

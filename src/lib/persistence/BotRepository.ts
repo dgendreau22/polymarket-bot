@@ -28,8 +28,8 @@ export function createBot(config: Omit<BotConfig, 'id'> & { id?: string }): BotR
   const now = new Date().toISOString();
 
   const stmt = db.prepare(`
-    INSERT INTO bots (id, name, strategy_slug, market_id, market_name, asset_id, mode, state, config, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'stopped', ?, ?, ?)
+    INSERT INTO bots (id, name, strategy_slug, market_id, market_name, asset_id, no_asset_id, mode, state, config, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?, ?, ?)
   `);
 
   stmt.run(
@@ -39,6 +39,7 @@ export function createBot(config: Omit<BotConfig, 'id'> & { id?: string }): BotR
     config.marketId,
     config.marketName || null,
     config.assetId || null,
+    config.noAssetId || null,
     config.mode,
     config.strategyConfig ? JSON.stringify(config.strategyConfig) : null,
     now,
@@ -164,14 +165,21 @@ export function deleteBot(id: string): boolean {
 // ============================================================================
 
 /**
- * Get or create position for a bot
+ * Get or create position for a bot and asset
+ * Now supports multiple positions per bot (e.g., YES and NO for arbitrage)
  */
-export function getOrCreatePosition(botId: string, marketId: string, assetId: string): PositionRow {
+export function getOrCreatePosition(
+  botId: string,
+  marketId: string,
+  assetId: string,
+  outcome: 'YES' | 'NO' = 'YES'
+): PositionRow {
   const db = getDatabase();
 
+  // Query by both bot_id AND asset_id to support multiple positions per bot
   let position = db
-    .prepare('SELECT * FROM positions WHERE bot_id = ?')
-    .get(botId) as PositionRow | null;
+    .prepare('SELECT * FROM positions WHERE bot_id = ? AND asset_id = ?')
+    .get(botId, assetId) as PositionRow | null;
 
   if (!position) {
     const id = uuidv4();
@@ -179,8 +187,8 @@ export function getOrCreatePosition(botId: string, marketId: string, assetId: st
 
     db.prepare(`
       INSERT INTO positions (id, bot_id, market_id, asset_id, outcome, size, avg_entry_price, realized_pnl, updated_at)
-      VALUES (?, ?, ?, ?, 'YES', '0', '0', '0', ?)
-    `).run(id, botId, marketId, assetId, now);
+      VALUES (?, ?, ?, ?, ?, '0', '0', '0', ?)
+    `).run(id, botId, marketId, assetId, outcome, now);
 
     position = db.prepare('SELECT * FROM positions WHERE id = ?').get(id) as PositionRow;
   }
@@ -189,10 +197,12 @@ export function getOrCreatePosition(botId: string, marketId: string, assetId: st
 }
 
 /**
- * Update position for a bot
+ * Update position for a bot and asset
+ * Now requires assetId to support multiple positions per bot
  */
 export function updatePosition(
   botId: string,
+  assetId: string,
   updates: Partial<Pick<Position, 'size' | 'avgEntryPrice' | 'realizedPnl' | 'outcome'>>
 ): void {
   const db = getDatabase();
@@ -218,17 +228,30 @@ export function updatePosition(
     params.push(updates.outcome);
   }
 
-  params.push(botId);
+  params.push(botId, assetId);
 
-  db.prepare(`UPDATE positions SET ${setClauses.join(', ')} WHERE bot_id = ?`).run(...params);
+  db.prepare(`UPDATE positions SET ${setClauses.join(', ')} WHERE bot_id = ? AND asset_id = ?`).run(...params);
 }
 
 /**
- * Get position for a bot
+ * Get position for a bot and specific asset
  */
-export function getPosition(botId: string): PositionRow | null {
+export function getPosition(botId: string, assetId?: string): PositionRow | null {
   const db = getDatabase();
+  if (assetId) {
+    return db.prepare('SELECT * FROM positions WHERE bot_id = ? AND asset_id = ?').get(botId, assetId) as PositionRow | null;
+  }
+  // Fallback: return first position (for backwards compatibility with non-arbitrage bots)
   return db.prepare('SELECT * FROM positions WHERE bot_id = ?').get(botId) as PositionRow | null;
+}
+
+/**
+ * Get all positions for a bot
+ * Returns array of positions (for arbitrage bots with YES and NO positions)
+ */
+export function getPositionsByBotId(botId: string): PositionRow[] {
+  const db = getDatabase();
+  return db.prepare('SELECT * FROM positions WHERE bot_id = ?').all(botId) as PositionRow[];
 }
 
 // ============================================================================
@@ -246,6 +269,7 @@ export function rowToConfig(row: BotRow): BotConfig {
     marketId: row.market_id,
     marketName: row.market_name || undefined,
     assetId: row.asset_id || undefined,
+    noAssetId: row.no_asset_id || undefined,
     mode: row.mode,
     strategyConfig: row.config ? JSON.parse(row.config) : undefined,
   };

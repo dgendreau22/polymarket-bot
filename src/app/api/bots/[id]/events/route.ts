@@ -9,6 +9,7 @@ import { NextRequest } from 'next/server';
 import { getBotManager } from '@/lib/bots/BotManager';
 import { getTrades, rowToTrade } from '@/lib/persistence/TradeRepository';
 import { getOpenOrdersByBotId, rowToLimitOrder } from '@/lib/persistence/LimitOrderRepository';
+import { getPositionsByBotId, rowToPosition } from '@/lib/persistence/BotRepository';
 import type { BotEvent } from '@/lib/bots/types';
 
 export const dynamic = 'force-dynamic';
@@ -49,9 +50,14 @@ export async function GET(
           send('bot', botInstance);
         }
 
+        // Send current positions (for arbitrage bots, returns YES and NO positions)
+        const positionRows = getPositionsByBotId(id);
+        const positions = positionRows.map(rowToPosition);
+        send('positions', positions);
+
         // Send current trades (convert from DB rows to Trade objects)
         const tradeRows = getTrades({ botId: id, status: 'filled' });
-        const trades = tradeRows.slice(0, 50).map(rowToTrade);
+        const trades = tradeRows.map(rowToTrade);
         send('trades', trades);
 
         // Send current orders
@@ -69,21 +75,29 @@ export async function GET(
 
         // For trade/fill events, also send updated data
         if (event.type === 'TRADE_EXECUTED' || event.type === 'ORDER_FILLED') {
-          // Send updated bot instance (for position/metrics)
-          const botInstance = manager.getBot(id);
-          if (botInstance) {
-            send('bot', botInstance);
-          }
+          // Use setImmediate to ensure position updates complete before we fetch and send data
+          setImmediate(() => {
+            // Send updated bot instance (for metrics)
+            const botInstance = manager.getBot(id);
+            if (botInstance) {
+              send('bot', botInstance);
+            }
 
-          // Send updated trades (convert from DB rows to Trade objects)
-          const tradeRows = getTrades({ botId: id, status: 'filled' });
-          const trades = tradeRows.slice(0, 50).map(rowToTrade);
-          send('trades', trades);
+            // Send updated positions (for arbitrage bots, returns YES and NO positions)
+            const positionRows = getPositionsByBotId(id);
+            const positions = positionRows.map(rowToPosition);
+            send('positions', positions);
 
-          // Send updated orders
-          const orderRows = getOpenOrdersByBotId(id);
-          const orders = orderRows.map(rowToLimitOrder);
-          send('orders', orders);
+            // Send updated trades (convert from DB rows to Trade objects)
+            const tradeRows = getTrades({ botId: id, status: 'filled' });
+            const trades = tradeRows.map(rowToTrade);
+            send('trades', trades);
+
+            // Send updated orders
+            const orderRows = getOpenOrdersByBotId(id);
+            const orders = orderRows.map(rowToLimitOrder);
+            send('orders', orders);
+          });
         }
       };
 

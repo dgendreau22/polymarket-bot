@@ -24,6 +24,12 @@ import { getExecutor } from '../strategies/registry';
 import { getWebSocket } from '../polymarket/websocket';
 import { processTradeForBotFills, fillMarketableOrders } from './LimitOrderMatcher';
 import {
+  getPositionsByBotId,
+  getOrCreatePosition,
+  updatePosition,
+  rowToPosition,
+} from '../persistence/BotRepository';
+import {
   getOpenOrdersByBotId,
   cancelAllBotOrders,
   cancelStaleOrders,
@@ -49,8 +55,15 @@ export class Bot {
   private currentLastTrade: LastTrade | null = null;
   private currentTickSize: TickSize | null = null;
 
+  // Arbitrage-specific fields (dual-asset tracking)
+  private noOrderBook: OrderBook | null = null;
+
   // Executor for trade execution (set by BotManager)
   private tradeExecutor?: (bot: Bot, signal: StrategySignal) => Promise<Trade | null>;
+
+  // Market status tracking (auto-stop when market closes)
+  private lastMarketCheck: number = 0;
+  private readonly MARKET_CHECK_INTERVAL_MS = 60000; // Check every 60 seconds
 
   constructor(config: Omit<BotConfig, 'id'> & { id?: string }) {
     this.config = {
@@ -103,6 +116,14 @@ export class Bot {
 
   get assetId(): string | undefined {
     return this.config.assetId;
+  }
+
+  get noAssetId(): string | undefined {
+    return this.config.noAssetId;
+  }
+
+  get isArbitrageStrategy(): boolean {
+    return this.config.strategySlug === 'arbitrage';
   }
 
   get mode(): BotMode {
@@ -211,8 +232,8 @@ export class Bot {
             };
           }
 
-          // Check for marketable orders on price changes
-          const marketableFills = fillMarketableOrders(this.id, this.currentOrderBook);
+          // Check for marketable orders on price changes (pass both order books for arbitrage)
+          const marketableFills = fillMarketableOrders(this.id, this.currentOrderBook, this.noOrderBook);
           for (const fill of marketableFills) {
             this.handleOrderFilled(fill);
           }
@@ -240,6 +261,66 @@ export class Bot {
         this.currentTickSize = tickSize;
         console.log(`[Bot ${this.id}] Tick size updated: ${tickSize.tick_size}`);
       });
+    }
+
+    // Subscribe to NO asset order book for arbitrage strategies
+    console.log(`[Bot ${this.id}] Arbitrage check: isArbitrage=${this.isArbitrageStrategy}, noAssetId=${this.config.noAssetId || 'NOT SET'}`);
+    if (this.isArbitrageStrategy && this.config.noAssetId) {
+      const ws = getWebSocket();
+      const noAssetId = this.config.noAssetId;
+
+      // Fetch initial NO order book
+      await this.fetchNoOrderBook();
+
+      // Subscribe to NO asset order book updates
+      ws.subscribeOrderBook([noAssetId], (orderBook) => {
+        if (this.state !== 'running') return;
+        this.noOrderBook = orderBook;
+        console.log(`[Bot ${this.id}] NO order book updated: ${orderBook.bids?.length || 0} bids, ${orderBook.asks?.length || 0} asks`);
+
+        // Check for marketable orders on NO order book changes
+        const marketableFills = fillMarketableOrders(this.id, this.currentOrderBook, this.noOrderBook);
+        for (const fill of marketableFills) {
+          this.handleOrderFilled(fill);
+        }
+      });
+
+      // Subscribe to NO asset price changes
+      ws.subscribePrice([noAssetId], (_assetId, _price, bestBid, bestAsk) => {
+        if (this.state !== 'running') return;
+
+        if (bestBid && bestAsk) {
+          // Update NO order book with latest prices
+          if (!this.noOrderBook) {
+            this.noOrderBook = {
+              market: '',
+              asset_id: noAssetId,
+              bids: [{ price: bestBid, size: '1000000' }],
+              asks: [{ price: bestAsk, size: '1000000' }],
+              timestamp: new Date().toISOString(),
+            };
+          } else {
+            const bid = parseFloat(bestBid);
+            const ask = parseFloat(bestAsk);
+            const existingBids = (this.noOrderBook.bids || []).filter(b => parseFloat(b.price) < bid);
+            const existingAsks = (this.noOrderBook.asks || []).filter(a => parseFloat(a.price) > ask);
+            this.noOrderBook = {
+              ...this.noOrderBook,
+              bids: [{ price: bestBid, size: '1000000' }, ...existingBids],
+              asks: [{ price: bestAsk, size: '1000000' }, ...existingAsks],
+            };
+          }
+          console.log(`[Bot ${this.id}] NO price update: bid=${bestBid}, ask=${bestAsk}`);
+
+          // Check for marketable orders on NO price changes
+          const marketableFills = fillMarketableOrders(this.id, this.currentOrderBook, this.noOrderBook);
+          for (const fill of marketableFills) {
+            this.handleOrderFilled(fill);
+          }
+        }
+      });
+
+      console.log(`[Bot ${this.id}] Subscribed to NO asset: ${noAssetId}`);
     }
 
     // Fallback interval for cases where WebSocket updates are slow/missing
@@ -340,6 +421,33 @@ export class Bot {
   }
 
   /**
+   * Fetch initial NO order book for arbitrage strategies
+   */
+  private async fetchNoOrderBook(): Promise<void> {
+    const noAssetId = this.config.noAssetId;
+    if (!noAssetId) return;
+
+    try {
+      const CLOB_HOST = process.env.POLYMARKET_CLOB_HOST || 'https://clob.polymarket.com';
+      const response = await fetch(`${CLOB_HOST}/book?token_id=${encodeURIComponent(noAssetId)}`);
+      const orderBook = await response.json();
+
+      if (orderBook) {
+        this.noOrderBook = {
+          market: '',
+          asset_id: noAssetId,
+          bids: orderBook.bids || [],
+          asks: orderBook.asks || [],
+          timestamp: new Date().toISOString(),
+        };
+        console.log(`[Bot ${this.id}] Fetched initial NO order book: ${this.noOrderBook.bids.length} bids, ${this.noOrderBook.asks.length} asks`);
+      }
+    } catch (error) {
+      console.error(`[Bot ${this.id}] Failed to fetch NO order book:`, error);
+    }
+  }
+
+  /**
    * Update prices from order book data
    */
   private updatePricesFromOrderBook(orderBook: OrderBook): void {
@@ -399,6 +507,12 @@ export class Bot {
     if (this.config.assetId) {
       const ws = getWebSocket();
       ws.unsubscribe([this.config.assetId]);
+    }
+
+    // Unsubscribe from NO asset (arbitrage strategies)
+    if (this.config.noAssetId) {
+      const ws = getWebSocket();
+      ws.unsubscribe([this.config.noAssetId]);
     }
 
     // Cancel all pending orders
@@ -477,6 +591,13 @@ export class Bot {
       return;
     }
 
+    // Check if market is still open (periodic check, not every cycle)
+    const marketOpen = await this.checkMarketStatus();
+    if (!marketOpen) {
+      await this.handleMarketClosed();
+      return;
+    }
+
     // Refresh price before each cycle to ensure we have the latest
     await this.refreshPrice();
 
@@ -516,26 +637,38 @@ export class Bot {
       }
     }
 
-    // Check and fill any pending orders that are now marketable against the order book
-    if (this.currentOrderBook) {
-      const marketableFills = fillMarketableOrders(this.id, this.currentOrderBook);
+    // Check and fill any pending orders that are now marketable against the order book(s)
+    if (this.currentOrderBook || this.noOrderBook) {
+      const marketableFills = fillMarketableOrders(this.id, this.currentOrderBook, this.noOrderBook);
       for (const fill of marketableFills) {
         this.handleOrderFilled(fill);
       }
     }
 
-    // Calculate pending order quantities
+    // Calculate pending order quantities (total and per-asset for arbitrage)
     const openOrders = getOpenOrdersByBotId(this.id);
     let pendingBuyQuantity = 0;
     let pendingSellQuantity = 0;
+    let yesPendingBuy = 0;
+    let noPendingBuy = 0;
     for (const order of openOrders) {
       const remainingQty = parseFloat(order.quantity) - parseFloat(order.filled_quantity);
       if (order.side === 'BUY') {
         pendingBuyQuantity += remainingQty;
+        // Track per-outcome for arbitrage strategies
+        if (order.outcome === 'YES') {
+          yesPendingBuy += remainingQty;
+        } else {
+          noPendingBuy += remainingQty;
+        }
       } else {
         pendingSellQuantity += remainingQty;
       }
     }
+
+    // Fetch positions from database for multi-asset strategies
+    const positionRows = getPositionsByBotId(this.id);
+    const positions = positionRows.map(rowToPosition);
 
     // Build context
     const context: StrategyContext = {
@@ -547,6 +680,14 @@ export class Bot {
       tickSize: this.currentTickSize || undefined,
       pendingBuyQuantity,
       pendingSellQuantity,
+      yesPendingBuy,
+      noPendingBuy,
+      // Multi-asset fields
+      positions: positions.length > 0 ? positions : undefined,
+      noAssetId: this.config.noAssetId,
+      noOrderBook: this.noOrderBook || undefined,
+      yesPrices: this.getYesPrices(),
+      noPrices: this.getNoPrices(),
     };
 
     // Execute strategy
@@ -622,40 +763,52 @@ export class Bot {
   // ============================================================================
 
   /**
-   * Update position after a trade
+   * Update position after a trade (both in-memory and database)
    */
   private updatePositionFromTrade(trade: Trade): void {
     const currentSize = parseFloat(this.position.size);
     const tradeQty = parseFloat(trade.quantity);
     const tradePrice = parseFloat(trade.price);
 
+    let newSize: number;
+    let newAvg: number;
+    let newPnl: number = parseFloat(this.position.realizedPnl);
+
     if (trade.side === 'BUY') {
       // Buying increases position
-      const newSize = currentSize + tradeQty;
+      newSize = currentSize + tradeQty;
       const currentAvg = parseFloat(this.position.avgEntryPrice);
-      const newAvg = currentSize === 0
+      newAvg = currentSize === 0
         ? tradePrice
         : (currentAvg * currentSize + tradePrice * tradeQty) / newSize;
-
-      this.position.size = newSize.toString();
-      this.position.avgEntryPrice = newAvg.toFixed(6);
     } else {
       // Selling decreases position
-      const newSize = currentSize - tradeQty;
+      newSize = Math.max(0, currentSize - tradeQty);
+      newAvg = parseFloat(this.position.avgEntryPrice);
 
       // Calculate realized PnL
-      const avgEntry = parseFloat(this.position.avgEntryPrice);
-      const pnl = (tradePrice - avgEntry) * tradeQty;
-      const currentPnl = parseFloat(this.position.realizedPnl);
-
-      this.position.size = Math.max(0, newSize).toString();
-      this.position.realizedPnl = (currentPnl + pnl).toFixed(6);
+      const pnl = (tradePrice - newAvg) * tradeQty;
+      newPnl += pnl;
 
       // Reset avg entry price if position closed
       if (newSize <= 0) {
-        this.position.avgEntryPrice = '0';
+        newAvg = 0;
       }
     }
+
+    // Update in-memory position
+    this.position.size = newSize.toString();
+    this.position.avgEntryPrice = newAvg.toFixed(6);
+    this.position.realizedPnl = newPnl.toFixed(6);
+
+    // Persist to database so SSE can fetch updated position immediately
+    const assetId = trade.assetId || this.config.assetId || '';
+    getOrCreatePosition(this.id, this.config.marketId, assetId, trade.outcome);
+    updatePosition(this.id, assetId, {
+      size: newSize.toFixed(6),
+      avgEntryPrice: newAvg.toFixed(6),
+      realizedPnl: newPnl.toFixed(6),
+    });
 
     // Update metrics
     this.metrics.totalTrades++;
@@ -688,6 +841,57 @@ export class Bot {
    */
   updatePrice(yes: string, no: string): void {
     this.currentPrice = { yes, no };
+  }
+
+  // ============================================================================
+  // Arbitrage Position Management
+  // ============================================================================
+
+  /**
+   * Get NO order book
+   */
+  getNoOrderBook(): OrderBook | null {
+    return this.noOrderBook;
+  }
+
+  /**
+   * Extract best bid/ask prices from YES order book
+   */
+  private getYesPrices(): { bestBid: number; bestAsk: number } | undefined {
+    if (!this.currentOrderBook) return undefined;
+
+    const bids = this.currentOrderBook.bids || [];
+    const asks = this.currentOrderBook.asks || [];
+
+    if (bids.length === 0 || asks.length === 0) return undefined;
+
+    const sortedBids = [...bids].sort((a, b) => parseFloat(b.price) - parseFloat(a.price));
+    const sortedAsks = [...asks].sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
+
+    return {
+      bestBid: parseFloat(sortedBids[0].price),
+      bestAsk: parseFloat(sortedAsks[0].price),
+    };
+  }
+
+  /**
+   * Extract best bid/ask prices from NO order book
+   */
+  private getNoPrices(): { bestBid: number; bestAsk: number } | undefined {
+    if (!this.noOrderBook) return undefined;
+
+    const bids = this.noOrderBook.bids || [];
+    const asks = this.noOrderBook.asks || [];
+
+    if (bids.length === 0 || asks.length === 0) return undefined;
+
+    const sortedBids = [...bids].sort((a, b) => parseFloat(b.price) - parseFloat(a.price));
+    const sortedAsks = [...asks].sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
+
+    return {
+      bestBid: parseFloat(sortedBids[0].price),
+      bestAsk: parseFloat(sortedAsks[0].price),
+    };
   }
 
   // ============================================================================
@@ -863,5 +1067,79 @@ export class Bot {
    */
   setState(state: BotState): void {
     this.state = state;
+  }
+
+  // ============================================================================
+  // Market Status Monitoring
+  // ============================================================================
+
+  /**
+   * Check if the market is still active/open
+   * Returns true if market check passed (ok to continue), false if market closed
+   */
+  private async checkMarketStatus(): Promise<boolean> {
+    const now = Date.now();
+
+    // Only check periodically to avoid excessive API calls
+    if (now - this.lastMarketCheck < this.MARKET_CHECK_INTERVAL_MS) {
+      return true; // Skip check, assume still open
+    }
+
+    this.lastMarketCheck = now;
+
+    try {
+      const GAMMA_HOST = process.env.POLYMARKET_GAMMA_HOST || 'https://gamma-api.polymarket.com';
+      const response = await fetch(`${GAMMA_HOST}/markets/${this.config.marketId}`);
+
+      if (!response.ok) {
+        console.warn(`[Bot ${this.id}] Failed to check market status: ${response.status}`);
+        return true; // Don't stop on API errors, continue trading
+      }
+
+      const market = await response.json();
+
+      // Check if market is closed or inactive
+      if (market.closed === true || market.active === false) {
+        console.log(`[Bot ${this.id}] Market closed or inactive (closed=${market.closed}, active=${market.active})`);
+        return false;
+      }
+
+      // Check if market end date has passed
+      if (market.endDateIso) {
+        const endDate = new Date(market.endDateIso);
+        if (endDate <= new Date()) {
+          console.log(`[Bot ${this.id}] Market end date passed: ${market.endDateIso}`);
+          return false;
+        }
+      }
+
+      return true;
+    } catch (error) {
+      console.warn(`[Bot ${this.id}] Error checking market status:`, error);
+      return true; // Don't stop on errors, continue trading
+    }
+  }
+
+  /**
+   * Handle market closure - stop bot and cancel pending orders
+   */
+  private async handleMarketClosed(): Promise<void> {
+    console.log(`[Bot ${this.id}] Market closed - stopping bot and cancelling pending orders`);
+
+    // Cancel all pending orders
+    const cancelledCount = cancelAllBotOrders(this.id);
+    if (cancelledCount > 0) {
+      console.log(`[Bot ${this.id}] Cancelled ${cancelledCount} pending orders due to market closure`);
+    }
+
+    // Emit error event
+    this.emitEvent({
+      type: 'ERROR',
+      error: 'Market closed - bot auto-stopped',
+      timestamp: new Date(),
+    });
+
+    // Stop the bot
+    await this.stop();
   }
 }

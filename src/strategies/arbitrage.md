@@ -1,6 +1,6 @@
 ---
-name: Arbitrage
-version: 1.0.0
+name: Arbitrage (YES + NO < $1)
+version: 3.0.0
 author: System
 ---
 
@@ -8,93 +8,106 @@ author: System
 
 ## Description
 
-Detects and exploits pricing inefficiencies between YES and NO outcomes in binary markets. When YES + NO prices sum to less than 1.0, there's a risk-free arbitrage opportunity.
+Exploits pricing inefficiencies where YES + NO prices sum to less than $1.00. The strategy enters legs separately during price dislocations, prioritizes balancing positions, and holds until market resolution for the guaranteed $1 payout.
 
-In a perfect market, YES price + NO price = 1.0. When this sum is less than 1.0, buying both outcomes guarantees a profit regardless of the outcome.
+In a perfect market, YES price + NO price = $1.00. When this sum is less than $1.00, there's a guaranteed arbitrage profit at resolution.
+
+**Key Insight**: Once one leg is entered, the strategy shifts focus to accumulate the other leg to hedge the position. This ensures balanced exposure and reduces risk.
 
 ## Algorithm
 
-1. **Monitor Prices**: Track YES and NO prices for target markets
-2. **Detect Opportunity**: Check if YES + NO < 1.0 (accounting for fees)
-3. **Calculate Profit**:
-   - Cost = YES_price + NO_price
-   - Revenue = 1.0 (guaranteed payout)
-   - Profit = Revenue - Cost - Fees
-4. **Execute**: If profit > minSpread, buy both YES and NO
-5. **Hold to Settlement**: Wait for market resolution to collect payout
+1. **Monitor Prices**: Track YES and NO best bid/ask prices from order books
+2. **Prioritize Lagging Leg**: Always focus on the leg with smaller position size
+3. **Imbalance Limit**:
+   - No absolute limit on individual leg size
+   - The **difference** between legs must not exceed `maxPosition`
+   - Example: If maxPosition=100 and YES=170, NO=80: diff=90 ≤ 100 ✓ Can buy either
+4. **Adaptive Order Placement**:
+   - Normal: Place passive orders below best bid
+   - Large imbalance (>50%): Place aggressive orders at best ask for immediate fill
+5. **Cost Validation**: Before each order, verify projected avg cost sum < $1
+6. **Hold to Settlement**: Wait for market resolution to collect $1 payout per matched pair
 
 ## Parameters
 
 | Name | Type | Default | Min | Max | Description |
 |------|------|---------|-----|-----|-------------|
-| minSpread | number | 0.01 | 0.005 | 0.05 | Minimum spread to trigger trade (1% = 0.01) |
-| maxSlippage | number | 0.005 | 0.001 | 0.02 | Maximum acceptable slippage |
-| orderSize | string | 50 | - | - | Size per trade in USDC |
-| marketsToMonitor | string[] | [] | - | - | List of market IDs to monitor |
+| orderSize | number | 10 | 1 | 1000 | Size per order (shares) |
+| maxPosition | number | 100 | 10 | 10000 | Max allowed difference between leg sizes (imbalance limit) |
+| legEntryThreshold | number | 0.02 | 0.01 | 0.10 | Discount from 0.50 required to enter a leg |
 
 ## Risk Management
 
-- **maxPositionSize**: $500 (maximum capital deployed per opportunity)
-- **maxDrawdown**: 2% (very conservative due to "risk-free" nature)
-- **maxOpenOrders**: 2 (limit concurrent arbitrage positions)
+- **Cost Constraint**: Combined average entry price (YES avg + NO avg) must always be < $1.00
+- **Position Balancing**: Lagging leg gets priority to minimize unhedged exposure
+- **maxOpenOrders**: 1 per leg at a time
+- **Position Status**:
+  - `building` - Accumulating YES and/or NO positions
+  - `complete` - Both legs have balanced positions, holding for resolution
+  - `closed` - Position exited
 
-## Execution Logic
+## Entry Logic
 
-```typescript
-async function checkArbitrage(market: Market): Promise<ArbitrageOpportunity | null> {
-  const yesPrice = parseFloat(market.outcomePrices[0]);
-  const noPrice = parseFloat(market.outcomePrices[1]);
+```
+Priority 1: Balance lagging leg (if position exists)
+- If imbalance > 50%: Use AGGRESSIVE orders (at best ask)
+- Otherwise: Use passive orders (below best bid)
+- Only if projected combined avg < $1.00
 
-  const totalCost = yesPrice + noPrice;
-  const spread = 1.0 - totalCost;
+Priority 2: Enter favorable leg (initial entry or balanced accumulation)
+- Enter YES if YES ask < 0.50 - legEntryThreshold
+- Enter NO if NO ask < 0.50 - legEntryThreshold
+- Only if projected combined avg < $1.00
 
-  // Check if there's a profitable opportunity
-  if (spread > config.minSpread) {
-    const profit = spread * parseFloat(config.orderSize);
+Priority 3: Place passive order on lagging leg
+- Even if not at threshold, place passive bid to catch up
+- Only when large imbalance exists
 
-    return {
-      marketId: market.id,
-      yesPrice,
-      noPrice,
-      spread,
-      expectedProfit: profit,
-      confidence: 0.95
-    };
-  }
+Safety checks:
+- Never place orders that would push combined avg >= $1.00
+- Never place orders that cross the spread (except aggressive mode)
+```
 
-  return null;
-}
+## Imbalance Control
 
-async function execute(context: StrategyContext): Promise<StrategySignal[]> {
-  const opportunity = await checkArbitrage(context.market);
+```
+sizeDiff = abs(YES_size - NO_size)
 
-  if (!opportunity) return [];
+A leg can buy more if:
+- It's the lagging leg (buying reduces the diff), OR
+- It's the leading leg but diff < maxPosition (still room to grow)
 
-  return [
-    {
-      action: 'BUY',
-      side: 'YES',
-      price: opportunity.yesPrice.toString(),
-      quantity: config.orderSize,
-      reason: `Arbitrage: ${(opportunity.spread * 100).toFixed(2)}% spread`,
-      confidence: opportunity.confidence
-    },
-    {
-      action: 'BUY',
-      side: 'NO',
-      price: opportunity.noPrice.toString(),
-      quantity: config.orderSize,
-      reason: `Arbitrage: ${(opportunity.spread * 100).toFixed(2)}% spread`,
-      confidence: opportunity.confidence
-    }
-  ];
-}
+Examples (maxPosition=100):
+- YES=50, NO=0   → diff=50  ✓ Can buy YES (at limit soon)
+- YES=100, NO=0  → diff=100 ✓ Can buy YES (at limit)
+- YES=101, NO=0  → diff=101 ✗ Must buy NO first
+- YES=170, NO=80 → diff=90  ✓ Can buy either
+- YES=170, NO=60 → diff=110 ✗ Must buy NO to reduce diff
+
+This ensures one side never grows too much without hedging.
+Individual leg sizes are unlimited - only the imbalance is capped.
+```
+
+## Expected Profit Calculation
+
+```
+Cost per pair = YES entry price + NO entry price
+Revenue per pair = $1.00 (guaranteed at resolution)
+Profit per pair = $1.00 - Cost
+ROI = (1.00 - Cost) / Cost
+
+Example with YES@0.48, NO@0.47:
+- Cost = $0.95
+- Profit = $0.05 per share
+- ROI = 5.26%
 ```
 
 ## Notes
 
-- True arbitrage opportunities are rare in efficient markets
-- Account for trading fees when calculating profitability
-- Execution speed is critical - opportunities disappear quickly
+- Legs are entered separately with focus on balancing
 - Capital is locked until market resolution
-- Consider time value of money for long-dated markets
+- Time value of money matters for long-dated markets
+- Strategy works best on markets with volatile spreads
+- Position tracking is dual-leg: tracks YES and NO sizes independently
+- Aggressive mode activates when imbalance exceeds 50%
+- All orders validated against $1 cost ceiling before placement

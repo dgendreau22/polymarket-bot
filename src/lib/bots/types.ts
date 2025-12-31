@@ -22,6 +22,8 @@ export interface BotConfig {
   marketId: string;
   marketName?: string;
   assetId?: string;
+  /** NO asset ID for arbitrage strategies */
+  noAssetId?: string;
   mode: BotMode;
   strategyConfig?: Record<string, unknown>;
 }
@@ -46,6 +48,8 @@ export interface BotRow {
   market_id: string;
   market_name: string | null;
   asset_id: string | null;
+  /** NO asset ID for arbitrage strategies */
+  no_asset_id: string | null;
   mode: BotMode;
   state: BotState;
   config: string | null;
@@ -79,6 +83,44 @@ export interface PositionRow {
   size: string;
   avg_entry_price: string;
   realized_pnl: string;
+  updated_at: string;
+}
+
+// ============================================================================
+// Arbitrage Position Types (dual-leg YES + NO)
+// ============================================================================
+
+/** Arbitrage position status */
+export type ArbitragePositionStatus = 'building' | 'complete' | 'closed';
+
+/** Arbitrage position tracking (YES + NO legs) */
+export interface ArbitragePosition {
+  marketId: string;
+  yesAssetId: string;
+  noAssetId: string;
+  yesSize: string;
+  noSize: string;
+  yesAvgEntryPrice: string;
+  noAvgEntryPrice: string;
+  combinedCost: string;
+  realizedPnl: string;
+  status: ArbitragePositionStatus;
+}
+
+/** Database row for arbitrage position */
+export interface ArbitragePositionRow {
+  id: string;
+  bot_id: string;
+  market_id: string;
+  yes_asset_id: string;
+  no_asset_id: string;
+  yes_size: string;
+  no_size: string;
+  yes_avg_entry_price: string;
+  no_avg_entry_price: string;
+  combined_cost: string;
+  realized_pnl: string;
+  status: ArbitragePositionStatus;
   updated_at: string;
 }
 
@@ -261,6 +303,21 @@ export interface StrategyContext {
   pendingBuyQuantity?: number;
   /** Total quantity of pending SELL orders (not yet filled) */
   pendingSellQuantity?: number;
+  /** Pending BUY quantity for YES asset (arbitrage) */
+  yesPendingBuy?: number;
+  /** Pending BUY quantity for NO asset (arbitrage) */
+  noPendingBuy?: number;
+  // Multi-asset fields (for arbitrage and other multi-leg strategies)
+  /** All positions for this bot (YES and NO for arbitrage) */
+  positions?: Position[];
+  /** NO asset ID for arbitrage strategies */
+  noAssetId?: string;
+  /** NO side order book for arbitrage strategies */
+  noOrderBook?: OrderBook;
+  /** YES side best bid/ask prices */
+  yesPrices?: { bestBid: number; bestAsk: number };
+  /** NO side best bid/ask prices */
+  noPrices?: { bestBid: number; bestAsk: number };
 }
 
 /** Strategy signal output */

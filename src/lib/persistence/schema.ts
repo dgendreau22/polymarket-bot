@@ -105,6 +105,76 @@ export function initializeSchema(db: Database.Database): void {
     // Column already exists, ignore
   }
 
+  // Migration: Add no_asset_id column to bots table for arbitrage strategies
+  try {
+    db.exec(`ALTER TABLE bots ADD COLUMN no_asset_id TEXT`);
+    console.log('[Schema] Added no_asset_id column to bots table');
+  } catch {
+    // Column already exists, ignore
+  }
+
+  // Arbitrage positions table: tracks dual-leg positions (YES + NO) for arbitrage bots
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS arbitrage_positions (
+      id TEXT PRIMARY KEY,
+      bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE UNIQUE,
+      market_id TEXT NOT NULL,
+      yes_asset_id TEXT NOT NULL,
+      no_asset_id TEXT NOT NULL,
+      yes_size TEXT NOT NULL DEFAULT '0',
+      no_size TEXT NOT NULL DEFAULT '0',
+      yes_avg_entry_price TEXT NOT NULL DEFAULT '0',
+      no_avg_entry_price TEXT NOT NULL DEFAULT '0',
+      combined_cost TEXT NOT NULL DEFAULT '0',
+      realized_pnl TEXT NOT NULL DEFAULT '0',
+      status TEXT NOT NULL DEFAULT 'building' CHECK(status IN ('building', 'complete', 'closed')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
+  // Index for arbitrage positions
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_arbitrage_positions_bot_id ON arbitrage_positions(bot_id);
+  `);
+
+  // Migration: Allow multiple positions per bot (for arbitrage YES/NO legs)
+  // SQLite doesn't allow dropping constraints, so we need to recreate the table
+  try {
+    // Check if old table has UNIQUE on bot_id (by checking if we can create the new index)
+    db.exec(`CREATE UNIQUE INDEX idx_positions_bot_asset ON positions(bot_id, asset_id)`);
+    console.log('[Schema] Added unique index on positions(bot_id, asset_id)');
+
+    // If we got here, the new index was created. Now we need to drop the old UNIQUE constraint.
+    // Create new table without UNIQUE on bot_id
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS positions_new (
+        id TEXT PRIMARY KEY,
+        bot_id TEXT NOT NULL REFERENCES bots(id),
+        market_id TEXT NOT NULL,
+        asset_id TEXT NOT NULL,
+        outcome TEXT NOT NULL CHECK(outcome IN ('YES', 'NO')),
+        size TEXT NOT NULL DEFAULT '0',
+        avg_entry_price TEXT NOT NULL DEFAULT '0',
+        realized_pnl TEXT NOT NULL DEFAULT '0',
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+
+    // Copy data from old table
+    db.exec(`INSERT INTO positions_new SELECT * FROM positions`);
+
+    // Drop old table and rename new one
+    db.exec(`DROP TABLE positions`);
+    db.exec(`ALTER TABLE positions_new RENAME TO positions`);
+
+    // Recreate the unique index on the new table
+    db.exec(`CREATE UNIQUE INDEX idx_positions_bot_asset ON positions(bot_id, asset_id)`);
+
+    console.log('[Schema] Migrated positions table to allow multiple positions per bot');
+  } catch {
+    // Index already exists or migration already done, ignore
+  }
+
   console.log('[Schema] Database tables initialized');
 }
 

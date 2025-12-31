@@ -119,8 +119,8 @@ export function TradesTable({ trades, showBotName = false, formatPrice }: Trades
                   <span
                     className={`w-5 h-5 inline-flex items-center justify-center rounded text-xs font-medium ${
                       trade.outcome === "YES"
-                        ? "bg-blue-500/20 text-blue-500"
-                        : "bg-purple-500/20 text-purple-500"
+                        ? "bg-green-500/20 text-green-500"
+                        : "bg-red-500/20 text-red-500"
                     }`}
                   >
                     {trade.outcome === "YES" ? "Y" : "N"}

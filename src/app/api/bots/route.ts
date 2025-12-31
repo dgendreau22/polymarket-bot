@@ -96,7 +96,10 @@ export async function POST(request: NextRequest) {
 
     // Auto-fetch assetId from market if not provided
     let assetId = body.assetId;
-    if (!assetId) {
+    let noAssetId = body.noAssetId;
+    const isArbitrageStrategy = body.strategySlug === 'arbitrage';
+
+    if (!assetId || (isArbitrageStrategy && !noAssetId)) {
       try {
         // Fetch directly from Gamma API to avoid port mismatch issues
         const marketRes = await fetch(
@@ -108,14 +111,32 @@ export async function POST(request: NextRequest) {
         if (marketData) {
           const tokenIds = parseJsonArray<string>(marketData.clobTokenIds);
           if (tokenIds && tokenIds.length > 0) {
-            assetId = tokenIds[0]; // Use YES token as default
-            console.log(`[API] Auto-assigned assetId: ${assetId}`);
+            if (!assetId) {
+              assetId = tokenIds[0]; // YES token
+              console.log(`[API] Auto-assigned YES assetId: ${assetId}`);
+            }
+            // For arbitrage strategy, also fetch NO token
+            if (isArbitrageStrategy && tokenIds.length > 1 && !noAssetId) {
+              noAssetId = tokenIds[1]; // NO token
+              console.log(`[API] Auto-assigned NO assetId: ${noAssetId}`);
+            }
           }
         }
       } catch (err) {
         console.warn('[API] Failed to fetch market for assetId:', err);
         // Continue without assetId - bot will work but without live market data
       }
+    }
+
+    // Validate arbitrage strategy has both asset IDs
+    if (isArbitrageStrategy && (!assetId || !noAssetId)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Arbitrage strategy requires both YES and NO asset IDs. Market may not have two outcomes.',
+        },
+        { status: 400 }
+      );
     }
 
     const botManager = getBotManager();
@@ -125,6 +146,7 @@ export async function POST(request: NextRequest) {
       marketId: body.marketId,
       marketName: body.marketName,
       assetId,
+      noAssetId: isArbitrageStrategy ? noAssetId : undefined,
       mode: body.mode as BotMode,
       strategyConfig: body.strategyConfig,
     });

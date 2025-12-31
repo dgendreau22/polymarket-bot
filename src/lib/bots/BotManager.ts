@@ -24,6 +24,7 @@ import {
   deleteBot as deleteBotRecord,
   getOrCreatePosition,
   updatePosition,
+  getPositionsByBotId,
   rowToConfig,
   rowToPosition,
 } from '../persistence/BotRepository';
@@ -67,13 +68,21 @@ class BotManager {
           updateBotState(record.id, 'stopped');
         }
 
-        // Restore position if exists
-        const positionRecord = getOrCreatePosition(
-          record.id,
-          record.market_id,
-          record.asset_id || ''
-        );
-        bot.setPosition(rowToPosition(positionRecord));
+        // Restore positions - for arbitrage bots there may be multiple (YES and NO)
+        const positions = getPositionsByBotId(record.id);
+        if (positions.length > 0) {
+          // For non-arbitrage bots, just use the first position
+          bot.setPosition(rowToPosition(positions[0]));
+        } else {
+          // Create initial position if none exists
+          const positionRecord = getOrCreatePosition(
+            record.id,
+            record.market_id,
+            record.asset_id || '',
+            'YES'
+          );
+          bot.setPosition(rowToPosition(positionRecord));
+        }
 
         // Restore metrics
         const stats = getBotTradeStats(record.id);
@@ -120,33 +129,16 @@ class BotManager {
         // Persist trade
         createTrade(trade);
 
-        // Only persist position immediately for filled trades (live mode)
-        // For pending trades (dry-run mode), position is persisted when order fills
-        if (trade.status === 'filled') {
-          const position = b.getPosition();
-          updatePosition(b.id, {
-            size: position.size,
-            avgEntryPrice: position.avgEntryPrice,
-            realizedPnl: position.realizedPnl,
-          });
-        }
+        // Position is updated by LimitOrderMatcher for all strategies
+        // No need to update here since LimitOrderMatcher.updateTradeForOrderFill handles it
       }
 
       return trade;
     });
 
-    // Set up callback for when orders fill (dry-run mode)
-    bot.onEvent((event) => {
-      if (event.type === 'ORDER_FILLED') {
-        // Persist updated position when order fills
-        const position = bot.getPosition();
-        updatePosition(bot.id, {
-          size: position.size,
-          avgEntryPrice: position.avgEntryPrice,
-          realizedPnl: position.realizedPnl,
-        });
-      }
-    });
+    // Note: Position updates are now handled directly by LimitOrderMatcher
+    // for both immediate fills and pending order fills, using the unified
+    // position system (positions table with bot_id + asset_id).
   }
 
   // ============================================================================
@@ -164,8 +156,16 @@ class BotManager {
     // Create bot instance
     const bot = new Bot(fullConfig);
 
-    // Initialize position
-    getOrCreatePosition(record.id, record.market_id, record.asset_id || '');
+    // Initialize position(s)
+    if (config.strategySlug === 'arbitrage' && config.assetId && config.noAssetId) {
+      // For arbitrage bots, create TWO positions (YES and NO)
+      getOrCreatePosition(record.id, record.market_id, config.assetId, 'YES');
+      getOrCreatePosition(record.id, record.market_id, config.noAssetId, 'NO');
+      console.log(`[BotManager] Created YES and NO positions for arbitrage bot: ${record.id}`);
+    } else {
+      // For regular bots, create single position
+      getOrCreatePosition(record.id, record.market_id, record.asset_id || '', 'YES');
+    }
 
     // Set up executor
     this.setupBotExecutor(bot);
@@ -217,13 +217,8 @@ class BotManager {
       stoppedAt: new Date().toISOString(),
     });
 
-    // Persist final position
-    const position = bot.getPosition();
-    updatePosition(botId, {
-      size: position.size,
-      avgEntryPrice: position.avgEntryPrice,
-      realizedPnl: position.realizedPnl,
-    });
+    // Note: Position is already persisted by LimitOrderMatcher during trading
+    // The database is the source of truth, no need to persist in-memory position
 
     console.log(`[BotManager] Stopped bot: ${botId}`);
   }

@@ -85,7 +85,7 @@ export function processTradeForFills(lastTrade: LastTrade): FillResult[] {
       const newStatus = isFullyFilled ? 'filled' : 'partially_filled';
 
       // Update position and trade for this fill FIRST
-      const tradeCreated = updateTradeForOrderFill(freshOrder.id, freshOrder.bot_id, freshOrder.asset_id, lastTrade.price, fillAmount, isFullyFilled, freshOrder.side, newFilledQuantity);
+      const tradeCreated = updateTradeForOrderFill(freshOrder.id, freshOrder.bot_id, freshOrder.asset_id, freshOrder.outcome, lastTrade.price, fillAmount, isFullyFilled, freshOrder.side, newFilledQuantity);
 
       // Only update order if trade was created successfully
       if (tradeCreated) {
@@ -151,6 +151,7 @@ function checkPriceCrossing(
  * @param orderId - The order ID
  * @param botId - The bot ID
  * @param assetId - The asset ID (needed to create position if missing)
+ * @param outcome - The outcome (YES or NO) for the position
  * @param fillPrice - The price at which the order was filled
  * @param fillAmount - The quantity filled in this fill event
  * @param isFullyFilled - Whether the order is now fully filled
@@ -161,6 +162,7 @@ function updateTradeForOrderFill(
   orderId: string,
   botId: string,
   assetId: string,
+  outcome: 'YES' | 'NO',
   fillPrice: string,
   fillAmount: number,
   isFullyFilled: boolean,
@@ -176,7 +178,7 @@ function updateTradeForOrderFill(
     return false;
   }
 
-  const position = getOrCreatePosition(botId, bot.market_id, assetId);
+  const position = getOrCreatePosition(botId, bot.market_id, assetId, outcome);
   const currentSize = parseFloat(position.size);
   let pnl = 0;
 
@@ -196,7 +198,7 @@ function updateTradeForOrderFill(
     const newSize = Math.max(0, currentSize - fillAmount);
     const newRealizedPnl = currentRealizedPnl + pnl;
 
-    updatePosition(botId, {
+    updatePosition(botId, assetId, {
       size: newSize.toFixed(6),
       realizedPnl: newRealizedPnl.toFixed(6),
       // Reset avg entry price if position is closed
@@ -214,7 +216,7 @@ function updateTradeForOrderFill(
     const totalCost = (currentSize * currentAvgPrice) + (fillAmount * fillPriceNum);
     const newAvgPrice = newSize > 0 ? totalCost / newSize : fillPriceNum;
 
-    updatePosition(botId, {
+    updatePosition(botId, assetId, {
       size: newSize.toFixed(6),
       avgEntryPrice: newAvgPrice.toFixed(6),
     });
@@ -226,7 +228,7 @@ function updateTradeForOrderFill(
   const order = getLimitOrderById(orderId);
   if (!order) {
     console.warn(`[OrderMatcher] Order not found: ${orderId}`);
-    return;
+    return false;
   }
 
   const totalValue = (fillPriceNum * fillAmount).toFixed(6);
@@ -355,6 +357,7 @@ function fillSingleOrder(
     freshOrder.id,
     freshOrder.bot_id,
     freshOrder.asset_id,
+    freshOrder.outcome,
     fillPrice,
     actualFillAmount,
     isFullyFilled,
@@ -389,33 +392,42 @@ function fillSingleOrder(
 }
 
 /**
- * Fill pending orders that are marketable against the current order book
+ * Fill pending orders that are marketable against the current order book(s)
  *
  * @param botId - The bot ID to check orders for
- * @param orderBook - Current order book
+ * @param yesOrderBook - YES outcome order book
+ * @param noOrderBook - NO outcome order book (optional, for arbitrage bots)
  * @returns Array of fill results
  */
 export function fillMarketableOrders(
   botId: string,
-  orderBook: OrderBook | null
+  yesOrderBook: OrderBook | null,
+  noOrderBook?: OrderBook | null
 ): FillResult[] {
-  if (!orderBook) return [];
-
   const fills: FillResult[] = [];
 
-  const bids = orderBook.bids || [];
-  const asks = orderBook.asks || [];
+  // Helper to get best prices from an order book
+  const getBestPrices = (orderBook: OrderBook | null) => {
+    if (!orderBook) return { bestBid: 0, bestAsk: Infinity, sortedBids: [], sortedAsks: [] };
 
-  if (bids.length === 0 && asks.length === 0) return [];
+    const bids = orderBook.bids || [];
+    const asks = orderBook.asks || [];
 
-  const sortedBids = [...bids].sort((a, b) => parseFloat(b.price) - parseFloat(a.price));
-  const sortedAsks = [...asks].sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
+    const sortedBids = [...bids].sort((a, b) => parseFloat(b.price) - parseFloat(a.price));
+    const sortedAsks = [...asks].sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
 
-  const bestBid = sortedBids.length > 0 ? parseFloat(sortedBids[0].price) : 0;
-  const bestAsk = sortedAsks.length > 0 ? parseFloat(sortedAsks[0].price) : Infinity;
+    return {
+      bestBid: sortedBids.length > 0 ? parseFloat(sortedBids[0].price) : 0,
+      bestAsk: sortedAsks.length > 0 ? parseFloat(sortedAsks[0].price) : Infinity,
+      sortedBids,
+      sortedAsks,
+    };
+  };
+
+  const yesPrices = getBestPrices(yesOrderBook);
+  const noPrices = getBestPrices(noOrderBook || null);
 
   // Re-fetch open orders each iteration to get fresh state
-  // This prevents race conditions where orders are filled by other processes
   let openOrders = getOpenOrdersByBotId(botId);
 
   for (let i = 0; i < openOrders.length; i++) {
@@ -425,20 +437,24 @@ export function fillMarketableOrders(
 
     if (remainingQty <= 0) continue;
 
+    // Select the correct order book based on outcome
+    const isNoOrder = order.outcome === 'NO';
+    const prices = isNoOrder ? noPrices : yesPrices;
+
     let shouldFill = false;
     let fillPrice = '';
 
-    if (order.side === 'BUY' && bestAsk < Infinity && orderPrice >= bestAsk) {
+    if (order.side === 'BUY' && prices.bestAsk < Infinity && orderPrice >= prices.bestAsk) {
       shouldFill = true;
-      fillPrice = sortedAsks[0].price;
-    } else if (order.side === 'SELL' && bestBid > 0 && orderPrice <= bestBid) {
+      fillPrice = prices.sortedAsks[0].price;
+    } else if (order.side === 'SELL' && prices.bestBid > 0 && orderPrice <= prices.bestBid) {
       shouldFill = true;
-      fillPrice = sortedBids[0].price;
+      fillPrice = prices.sortedBids[0].price;
     }
 
     if (shouldFill) {
       console.log(
-        `[OrderMatcher] Filling marketable ${order.side} @ ${orderPrice} against ${order.side === 'BUY' ? 'ask' : 'bid'} @ ${fillPrice}`
+        `[OrderMatcher] Filling marketable ${order.outcome} ${order.side} @ ${orderPrice} against ${order.side === 'BUY' ? 'ask' : 'bid'} @ ${fillPrice}`
       );
 
       // Fill this specific order only (not all matching orders)

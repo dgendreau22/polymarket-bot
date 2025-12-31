@@ -228,17 +228,17 @@ export function BotCreateModal({
                         <Input
                           type={param.type === "number" ? "number" : "text"}
                           value={String(strategyConfig[param.name] ?? param.default)}
-                          onChange={(e) =>
-                            updateParam(
-                              param.name,
-                              param.type === "number"
-                                ? parseFloat(e.target.value) || 0
-                                : e.target.value
-                            )
-                          }
+                          onChange={(e) => {
+                            if (param.type === "number") {
+                              const val = parseFloat(e.target.value);
+                              updateParam(param.name, isNaN(val) ? 0 : val);
+                            } else {
+                              updateParam(param.name, e.target.value);
+                            }
+                          }}
                           min={param.min}
                           max={param.max}
-                          step={param.type === "number" ? "any" : undefined}
+                          step={param.type === "number" ? 0.001 : undefined}
                           required={param.required}
                         />
                         <p className="text-xs text-muted-foreground mt-1">

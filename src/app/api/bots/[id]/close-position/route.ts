@@ -32,8 +32,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    // Get position from database
-    const position = getPosition(botId, bot.config.marketId, bot.config.assetId);
+    // Get position from database (use assetId for multi-position bots)
+    const position = getPosition(botId, bot.config.assetId);
     if (!position) {
       return NextResponse.json(
         { success: false, error: 'No position found' },
@@ -52,6 +52,13 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // For dry-run mode, simulate a market order by placing a limit order at the best bid
     // In live mode, this would be an actual market order
     if (bot.config.mode === 'dry_run') {
+      if (!bot.config.assetId) {
+        return NextResponse.json(
+          { success: false, error: 'No asset ID configured for this bot' },
+          { status: 400 }
+        );
+      }
+
       // Fetch current order book to get best bid
       const CLOB_HOST = process.env.POLYMARKET_CLOB_HOST || 'https://clob.polymarket.com';
       const response = await fetch(`${CLOB_HOST}/book?token_id=${encodeURIComponent(bot.config.assetId)}`);
@@ -120,7 +127,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       // Update database position to zero
       const currentRealizedPnl = parseFloat(position.realized_pnl);
       const newRealizedPnl = (currentRealizedPnl + pnl).toFixed(6);
-      updatePosition(botId, {
+      updatePosition(botId, bot.config.assetId, {
         size: '0',
         avgEntryPrice: '0',
         realizedPnl: newRealizedPnl,
