@@ -45,7 +45,7 @@ Next.js 16 App Router application with React 19, TypeScript, Tailwind CSS v4, an
 - `DryRunExecutor.ts` - Simulates trades without real execution (for testing). `getMarketableFillPrice()` detects orders that cross the spread and fills them immediately at creation. Uses correct asset ID for YES vs NO trades.
 - `LimitOrderMatcher.ts` - Processes trades to fill limit orders. `fillMarketableOrders()` checks pending orders against order book each execution cycle to fill orders that become marketable
 - `LiveExecutor.ts` - Executes real trades via ClobClient
-- `types.ts` - Type definitions for BotConfig, BotInstance, Trade, StrategySignal, FillResult, ArbitragePosition, etc. Includes `yesPendingBuy`/`noPendingBuy` for per-asset order tracking.
+- `types.ts` - Type definitions for BotConfig, BotInstance, Trade, StrategySignal, FillResult, etc. Includes `yesPendingBuy`/`noPendingBuy` for per-asset order tracking.
 
 **`src/lib/strategies/`** - Strategy System:
 - `StrategyLoader.ts` - Parses markdown strategy files from `src/strategies/*.md` on-demand (no caching)

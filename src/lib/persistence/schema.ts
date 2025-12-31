@@ -113,30 +113,6 @@ export function initializeSchema(db: Database.Database): void {
     // Column already exists, ignore
   }
 
-  // Arbitrage positions table: tracks dual-leg positions (YES + NO) for arbitrage bots
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS arbitrage_positions (
-      id TEXT PRIMARY KEY,
-      bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE UNIQUE,
-      market_id TEXT NOT NULL,
-      yes_asset_id TEXT NOT NULL,
-      no_asset_id TEXT NOT NULL,
-      yes_size TEXT NOT NULL DEFAULT '0',
-      no_size TEXT NOT NULL DEFAULT '0',
-      yes_avg_entry_price TEXT NOT NULL DEFAULT '0',
-      no_avg_entry_price TEXT NOT NULL DEFAULT '0',
-      combined_cost TEXT NOT NULL DEFAULT '0',
-      realized_pnl TEXT NOT NULL DEFAULT '0',
-      status TEXT NOT NULL DEFAULT 'building' CHECK(status IN ('building', 'complete', 'closed')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    )
-  `);
-
-  // Index for arbitrage positions
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_arbitrage_positions_bot_id ON arbitrage_positions(bot_id);
-  `);
-
   // Migration: Allow multiple positions per bot (for arbitrage YES/NO legs)
   // SQLite doesn't allow dropping constraints, so we need to recreate the table
   try {

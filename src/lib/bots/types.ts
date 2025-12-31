@@ -87,44 +87,6 @@ export interface PositionRow {
 }
 
 // ============================================================================
-// Arbitrage Position Types (dual-leg YES + NO)
-// ============================================================================
-
-/** Arbitrage position status */
-export type ArbitragePositionStatus = 'building' | 'complete' | 'closed';
-
-/** Arbitrage position tracking (YES + NO legs) */
-export interface ArbitragePosition {
-  marketId: string;
-  yesAssetId: string;
-  noAssetId: string;
-  yesSize: string;
-  noSize: string;
-  yesAvgEntryPrice: string;
-  noAvgEntryPrice: string;
-  combinedCost: string;
-  realizedPnl: string;
-  status: ArbitragePositionStatus;
-}
-
-/** Database row for arbitrage position */
-export interface ArbitragePositionRow {
-  id: string;
-  bot_id: string;
-  market_id: string;
-  yes_asset_id: string;
-  no_asset_id: string;
-  yes_size: string;
-  no_size: string;
-  yes_avg_entry_price: string;
-  no_avg_entry_price: string;
-  combined_cost: string;
-  realized_pnl: string;
-  status: ArbitragePositionStatus;
-  updated_at: string;
-}
-
-// ============================================================================
 // Trade Types
 // ============================================================================
 
