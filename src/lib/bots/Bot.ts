@@ -712,7 +712,7 @@ export class Bot {
   }
 
   /**
-   * Refresh current price from order book
+   * Refresh current price and order books from CLOB API
    */
   private async refreshPrice(): Promise<void> {
     const assetId = this.config.assetId;
@@ -724,9 +724,18 @@ export class Bot {
       const response = await fetch(`${CLOB_HOST}/book?token_id=${encodeURIComponent(assetId)}`);
       const orderBook = await response.json();
 
-      if (orderBook) {
+      if (orderBook && !orderBook.error) {
         const bids = orderBook.bids || [];
         const asks = orderBook.asks || [];
+
+        // Store order book for marketable order checks
+        this.currentOrderBook = {
+          market: '',
+          asset_id: assetId,
+          bids,
+          asks,
+          timestamp: new Date().toISOString(),
+        };
 
         if (bids.length > 0 && asks.length > 0) {
           const sortedBids = [...bids].sort(
@@ -746,8 +755,24 @@ export class Bot {
           this.currentPrice.no = (1 - midPrice).toFixed(4);
         }
       }
+
+      // Also fetch NO order book for arbitrage strategies
+      if (this.isArbitrageStrategy && this.config.noAssetId) {
+        const noResponse = await fetch(`${CLOB_HOST}/book?token_id=${encodeURIComponent(this.config.noAssetId)}`);
+        const noOrderBook = await noResponse.json();
+
+        if (noOrderBook && !noOrderBook.error) {
+          this.noOrderBook = {
+            market: '',
+            asset_id: this.config.noAssetId,
+            bids: noOrderBook.bids || [],
+            asks: noOrderBook.asks || [],
+            timestamp: new Date().toISOString(),
+          };
+        }
+      }
     } catch (error) {
-      // Silently continue with previous price
+      // Silently continue with previous data
     }
   }
 
@@ -1087,36 +1112,39 @@ export class Bot {
 
     this.lastMarketCheck = now;
 
+    const assetId = this.config.assetId;
+    if (!assetId) {
+      return true; // No asset ID to check
+    }
+
     try {
-      const GAMMA_HOST = process.env.POLYMARKET_GAMMA_HOST || 'https://gamma-api.polymarket.com';
-      const response = await fetch(`${GAMMA_HOST}/markets/${this.config.marketId}`);
+      // Use CLOB API to check if order book exists - it's removed when market closes
+      const CLOB_HOST = process.env.POLYMARKET_CLOB_HOST || 'https://clob.polymarket.com';
+      const response = await fetch(`${CLOB_HOST}/book?token_id=${encodeURIComponent(assetId)}`);
 
       if (!response.ok) {
-        console.warn(`[Bot ${this.id}] Failed to check market status: ${response.status}`);
-        return true; // Don't stop on API errors, continue trading
-      }
-
-      const market = await response.json();
-
-      // Check if market is closed or inactive
-      if (market.closed === true || market.active === false) {
-        console.log(`[Bot ${this.id}] Market closed or inactive (closed=${market.closed}, active=${market.active})`);
-        return false;
-      }
-
-      // Check if market end date has passed
-      if (market.endDateIso) {
-        const endDate = new Date(market.endDateIso);
-        if (endDate <= new Date()) {
-          console.log(`[Bot ${this.id}] Market end date passed: ${market.endDateIso}`);
+        // 404 or other error could mean market is closed
+        const text = await response.text();
+        if (text.includes('No orderbook exists') || text.includes('market not found')) {
+          console.log(`[Bot ${this.id}] Market closed - order book no longer exists`);
           return false;
         }
+        console.warn(`[Bot ${this.id}] Failed to check market status: ${response.status}`);
+        return true; // Other errors - continue trading
+      }
+
+      const data = await response.json();
+
+      // Check if response indicates no order book
+      if (data.error && (data.error.includes('No orderbook') || data.error.includes('not found'))) {
+        console.log(`[Bot ${this.id}] Market closed - order book no longer exists`);
+        return false;
       }
 
       return true;
     } catch (error) {
       console.warn(`[Bot ${this.id}] Error checking market status:`, error);
-      return true; // Don't stop on errors, continue trading
+      return true; // Don't stop on network errors, continue trading
     }
   }
 
