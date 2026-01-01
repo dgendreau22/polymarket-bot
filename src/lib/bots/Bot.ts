@@ -28,11 +28,13 @@ import {
   getOrCreatePosition,
   updatePosition,
   rowToPosition,
+  updateBotState,
 } from '../persistence/BotRepository';
 import {
   getOpenOrdersByBotId,
   cancelAllBotOrders,
   cancelStaleOrders,
+  cancelStaleOrdersForOutcome,
   rowToLimitOrder,
 } from '../persistence/LimitOrderRepository';
 
@@ -637,6 +639,52 @@ export class Bot {
       }
     }
 
+    // Cancel stale orders for arbitrage strategy (per-leg price distance check)
+    // This catches phantom orders that are too far from market to ever fill
+    const isArbitrage = this.config.strategySlug === 'arbitrage';
+    if (isArbitrage) {
+      const yesPrices = this.getYesPrices();
+      const noPrices = this.getNoPrices();
+
+      // Calculate mid prices for each leg
+      const yesMidPrice = yesPrices
+        ? (yesPrices.bestBid + yesPrices.bestAsk) / 2
+        : 0;
+      const noMidPrice = noPrices
+        ? (noPrices.bestBid + noPrices.bestAsk) / 2
+        : 0;
+
+      const STALE_PRICE_DISTANCE = 0.20; // 20% from mid = phantom order
+
+      // Cancel YES orders too far from YES mid price
+      if (yesMidPrice > 0 && yesMidPrice < 1) {
+        const yesCancelled = cancelStaleOrdersForOutcome(
+          this.id,
+          'YES',
+          yesMidPrice,
+          undefined,  // No age limit
+          STALE_PRICE_DISTANCE
+        );
+        if (yesCancelled.length > 0) {
+          console.log(`[Bot ${this.id}] Cancelled ${yesCancelled.length} stale YES orders (mid=${yesMidPrice.toFixed(4)})`);
+        }
+      }
+
+      // Cancel NO orders too far from NO mid price
+      if (noMidPrice > 0 && noMidPrice < 1) {
+        const noCancelled = cancelStaleOrdersForOutcome(
+          this.id,
+          'NO',
+          noMidPrice,
+          undefined,  // No age limit
+          STALE_PRICE_DISTANCE
+        );
+        if (noCancelled.length > 0) {
+          console.log(`[Bot ${this.id}] Cancelled ${noCancelled.length} stale NO orders (mid=${noMidPrice.toFixed(4)})`);
+        }
+      }
+    }
+
     // Check and fill any pending orders that are now marketable against the order book(s)
     if (this.currentOrderBook || this.noOrderBook) {
       const marketableFills = fillMarketableOrders(this.id, this.currentOrderBook, this.noOrderBook);
@@ -646,20 +694,52 @@ export class Bot {
     }
 
     // Calculate pending order quantities (total and per-asset for arbitrage)
+    // For arbitrage, only count orders that are "fillable" (within 20% of market ask)
+    // This prevents phantom orders from inflating position limits
     const openOrders = getOpenOrdersByBotId(this.id);
     let pendingBuyQuantity = 0;
     let pendingSellQuantity = 0;
     let yesPendingBuy = 0;
     let noPendingBuy = 0;
+
+    // Get market prices for fillability check (arbitrage only)
+    const yesPricesForFilter = isArbitrage ? this.getYesPrices() : null;
+    const noPricesForFilter = isArbitrage ? this.getNoPrices() : null;
+    const FILLABILITY_THRESHOLD = 0.80; // Order must be within 20% of ask to count
+
     for (const order of openOrders) {
       const remainingQty = parseFloat(order.quantity) - parseFloat(order.filled_quantity);
       if (order.side === 'BUY') {
+        // Always count total pending for all strategies
         pendingBuyQuantity += remainingQty;
-        // Track per-outcome for arbitrage strategies
-        if (order.outcome === 'YES') {
-          yesPendingBuy += remainingQty;
+
+        // For arbitrage, only count fillable orders toward per-asset pending
+        if (isArbitrage) {
+          const orderPrice = parseFloat(order.price);
+          const marketAsk = order.outcome === 'YES'
+            ? yesPricesForFilter?.bestAsk
+            : noPricesForFilter?.bestAsk;
+
+          // Order is fillable if no market data OR price is within threshold of ask
+          const isFillable = !marketAsk || orderPrice >= marketAsk * FILLABILITY_THRESHOLD;
+
+          if (isFillable) {
+            if (order.outcome === 'YES') {
+              yesPendingBuy += remainingQty;
+            } else {
+              noPendingBuy += remainingQty;
+            }
+          } else {
+            // Log phantom orders for debugging
+            console.log(`[Bot ${this.id}] Phantom pending: ${order.outcome} ${remainingQty.toFixed(1)} @ ${orderPrice.toFixed(3)} (ask=${marketAsk?.toFixed(3)})`);
+          }
         } else {
-          noPendingBuy += remainingQty;
+          // Non-arbitrage: count all pending orders
+          if (order.outcome === 'YES') {
+            yesPendingBuy += remainingQty;
+          } else {
+            noPendingBuy += remainingQty;
+          }
         }
       } else {
         pendingSellQuantity += remainingQty;
@@ -934,8 +1014,23 @@ export class Bot {
   /**
    * Handle an order fill
    * Updates in-memory position based on the fill result
+   * For arbitrage bots, skips in-memory update since DB tracks per-asset positions
    */
   handleOrderFilled(fill: FillResult): void {
+    // For arbitrage bots, don't update in-memory position since we track per-asset in DB
+    // The single this.position object can't represent YES and NO positions correctly
+    // The UI fetches correct positions via SSE from the database
+    if (this.isArbitrageStrategy) {
+      // Just update metrics and emit event
+      this.metrics.totalTrades++;
+      this.updatedAt = new Date();
+      console.log(
+        `[Bot ${this.id}] Arbitrage fill: ${fill.side} ${fill.outcome} ${parseFloat(fill.filledQuantity).toFixed(4)} @ ${fill.fillPrice}`
+      );
+      this.emitEvent({ type: 'ORDER_FILLED', fill, timestamp: new Date() });
+      return;
+    }
+
     const fillQty = parseFloat(fill.filledQuantity);
     const fillPrice = parseFloat(fill.fillPrice);
     const currentSize = parseFloat(this.position.size);
@@ -1169,5 +1264,10 @@ export class Bot {
 
     // Stop the bot
     await this.stop();
+
+    // Update database state (must be done after stop() to sync in-memory and database)
+    updateBotState(this.id, 'stopped', {
+      stoppedAt: new Date().toISOString(),
+    });
   }
 }

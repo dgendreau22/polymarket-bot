@@ -657,7 +657,12 @@ export default function BotDetailPage() {
 
   const strategyName = formatStrategyName(bot.config.strategySlug);
   const pnl = parseFloat(bot.metrics.totalPnl);
-  const positionSize = parseFloat(bot.position.size);
+  const isArbitrage = bot.config.strategySlug === 'arbitrage';
+  // For arbitrage bots, calculate total position from positions array (DB source)
+  // For non-arbitrage, use bot.position (in-memory)
+  const positionSize = isArbitrage
+    ? positions.reduce((sum, p) => sum + parseFloat(p.size), 0)
+    : parseFloat(bot.position.size);
   const avgPrice = parseFloat(bot.position.avgEntryPrice);
   // Win rate based on trades with outcomes (winning + losing), not all trades
   const tradesWithOutcome = bot.metrics.winningTrades + bot.metrics.losingTrades;

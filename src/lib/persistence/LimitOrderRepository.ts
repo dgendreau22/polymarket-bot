@@ -200,6 +200,62 @@ export function cancelStaleOrders(
 }
 
 /**
+ * Cancel stale orders for a specific outcome (YES/NO) based on price distance
+ * Used by arbitrage strategy to cancel phantom orders on each leg separately
+ *
+ * @param botId - The bot ID
+ * @param outcome - The outcome to filter by ('YES' or 'NO')
+ * @param currentMidPrice - Current market mid price for this outcome
+ * @param maxAgeSeconds - Cancel orders older than this (optional)
+ * @param maxPriceDistance - Cancel orders more than this % from mid price (optional)
+ * @returns Array of cancelled order IDs
+ */
+export function cancelStaleOrdersForOutcome(
+  botId: string,
+  outcome: 'YES' | 'NO',
+  currentMidPrice: number,
+  maxAgeSeconds?: number,
+  maxPriceDistance?: number
+): string[] {
+  const openOrders = getOpenOrdersByBotId(botId);
+  const cancelledIds: string[] = [];
+  const now = Date.now();
+
+  for (const order of openOrders) {
+    // Skip orders for other outcomes
+    if (order.outcome !== outcome) continue;
+
+    const orderPrice = parseFloat(order.price);
+    const orderAgeMs = now - new Date(order.created_at).getTime();
+    const orderAgeSeconds = orderAgeMs / 1000;
+
+    // Check if order is too old
+    const isTooOld = maxAgeSeconds !== undefined && orderAgeSeconds > maxAgeSeconds;
+
+    // Check if order is too far from current price
+    const priceDistance = Math.abs(orderPrice - currentMidPrice) / currentMidPrice;
+    const isTooFar = maxPriceDistance !== undefined && priceDistance > maxPriceDistance;
+
+    if (isTooOld || isTooFar) {
+      cancelOrder(order.id);
+      cancelledIds.push(order.id);
+
+      const reason = isTooOld && isTooFar
+        ? `age=${orderAgeSeconds.toFixed(0)}s, distance=${(priceDistance * 100).toFixed(1)}%`
+        : isTooOld
+          ? `age=${orderAgeSeconds.toFixed(0)}s`
+          : `distance=${(priceDistance * 100).toFixed(1)}%`;
+
+      console.log(
+        `[OrderManager] Cancelled stale ${outcome} ${order.side} order ${order.id.slice(0, 8)}... @ ${order.price} (${reason})`
+      );
+    }
+  }
+
+  return cancelledIds;
+}
+
+/**
  * Get order count by status for a bot
  */
 export function getOrderCountByStatus(botId: string): Record<LimitOrderStatus, number> {

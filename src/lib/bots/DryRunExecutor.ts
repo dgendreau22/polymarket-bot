@@ -164,8 +164,11 @@ export async function executeDryRunTrade(
  */
 export function createDryRunExecutor(): (bot: Bot, signal: StrategySignal) => Promise<Trade | null> {
   return async (bot: Bot, signal: StrategySignal): Promise<Trade | null> => {
-    // Get current order book from bot for marketable order check
-    const orderBook = bot.getOrderBook();
+    // Get correct order book based on signal side (YES or NO)
+    // YES signals use YES order book, NO signals use NO order book
+    const orderBook = signal.side === 'YES'
+      ? bot.getOrderBook()
+      : (bot.getNoOrderBook() || bot.getOrderBook());
     const result = await executeDryRunTrade(bot, signal, orderBook);
 
     if (result.success && result.trade) {
