@@ -186,6 +186,21 @@ The arbitrage strategy (`registry.ts` ArbitrageExecutor) accumulates both YES an
 - Prioritizes lagging leg to maintain balance
 - Aggressive mode: crosses spread when imbalance exceeds threshold
 
+### Theme System
+
+**`src/lib/theme/`** - Dark/Light Mode Support:
+- `theme-provider.tsx` - React context managing theme state (`"dark"` | `"light"`), localStorage persistence, applies `.dark` class to `<html>`
+- `theme-script.tsx` - Inline script for FOUC prevention, runs before React hydration
+- `index.ts` - Module exports
+
+**`src/components/ui/theme-toggle.tsx`** - Theme toggle button with Sun/Moon icons (Lucide), uses `useTheme()` hook
+
+**Configuration:**
+- Default theme: `dark`
+- Storage key: `polymarket-theme`
+- CSS variables defined in `globals.css` using OKLCH color space
+- Toggle located in dashboard header
+
 ### Components
 
 **`src/components/bots/`:**

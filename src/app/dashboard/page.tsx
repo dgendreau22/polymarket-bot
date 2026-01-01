@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { BotList, BotCreateModal } from "@/components/bots";
 import { RefreshCw, AlertCircle, Wallet, DollarSign, Search, ChevronLeft, ChevronRight, Bot, Plus, TrendingUp, Briefcase } from "lucide-react";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 import type { BotInstance } from "@/lib/bots/types";
 
 interface BotStatus {
@@ -219,6 +220,9 @@ export default function DashboardPage() {
             </div>
 
             <div className="flex items-center gap-4">
+              {/* Theme Toggle */}
+              <ThemeToggle />
+
               {/* Connection Status */}
               <div className="flex items-center gap-2">
                 <div className={`w-2 h-2 rounded-full ${status?.configured ? "bg-green-500" : "bg-yellow-500"}`} />
