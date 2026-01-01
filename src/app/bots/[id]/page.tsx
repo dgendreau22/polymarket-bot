@@ -860,16 +860,16 @@ export default function BotDetailPage() {
               return upSize > 0 || downSize > 0 ? (
                 <div className="space-y-4">
                   <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm table-fixed">
                       <thead>
                         <tr className="text-muted-foreground border-b text-left">
-                          <th className="py-2 pr-3 font-medium">Side</th>
-                          <th className="py-2 pr-3 font-medium text-right">Size</th>
-                          <th className="py-2 pr-3 font-medium text-right">Avg Entry</th>
-                          <th className="py-2 pr-3 font-medium text-right">Current</th>
-                          <th className="py-2 pr-3 font-medium text-right">Unrealized</th>
-                          <th className="py-2 pr-3 font-medium text-right">Realized</th>
-                          <th className="py-2 font-medium text-right">Total</th>
+                          <th className="py-2 pr-3 font-medium w-[70px]">Side</th>
+                          <th className="py-2 pr-3 font-medium text-right w-[80px]">Size</th>
+                          <th className="py-2 pr-3 font-medium text-right w-[90px]">Avg Entry</th>
+                          <th className="py-2 pr-3 font-medium text-right w-[80px]">Current</th>
+                          <th className="py-2 pr-3 font-medium text-right w-[100px]">Unrealized</th>
+                          <th className="py-2 pr-3 font-medium text-right w-[90px]">Realized</th>
+                          <th className="py-2 font-medium text-right w-[90px]">Total</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -959,16 +959,16 @@ export default function BotDetailPage() {
           ) : positionSize > 0 ? (
             /* Non-arbitrage: Single position row */
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm table-fixed">
                 <thead>
                   <tr className="text-muted-foreground border-b text-left">
-                    <th className="py-2 pr-3 font-medium">Side</th>
-                    <th className="py-2 pr-3 font-medium text-right">Size</th>
-                    <th className="py-2 pr-3 font-medium text-right">Avg Entry</th>
-                    <th className="py-2 pr-3 font-medium text-right">Current</th>
-                    <th className="py-2 pr-3 font-medium text-right">Unrealized</th>
-                    <th className="py-2 pr-3 font-medium text-right">Realized</th>
-                    <th className="py-2 font-medium text-right">Total</th>
+                    <th className="py-2 pr-3 font-medium w-[70px]">Side</th>
+                    <th className="py-2 pr-3 font-medium text-right w-[80px]">Size</th>
+                    <th className="py-2 pr-3 font-medium text-right w-[90px]">Avg Entry</th>
+                    <th className="py-2 pr-3 font-medium text-right w-[80px]">Current</th>
+                    <th className="py-2 pr-3 font-medium text-right w-[100px]">Unrealized</th>
+                    <th className="py-2 pr-3 font-medium text-right w-[90px]">Realized</th>
+                    <th className="py-2 font-medium text-right w-[90px]">Total</th>
                   </tr>
                 </thead>
                 <tbody>
