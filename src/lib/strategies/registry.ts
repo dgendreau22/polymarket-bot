@@ -46,6 +46,17 @@ export function unregisterStrategy(slug: string): boolean {
   return executors.delete(slug);
 }
 
+/**
+ * Clean up any per-bot state stored by strategy executors.
+ * Call this when a bot is deleted to prevent memory leaks.
+ */
+export function cleanupBotState(botId: string): void {
+  const arbExecutor = executors.get('arbitrage') as ArbitrageExecutor | undefined;
+  if (arbExecutor?.cleanupBot) {
+    arbExecutor.cleanupBot(botId);
+  }
+}
+
 // ============================================================================
 // Built-in Strategy Executors
 // ============================================================================
@@ -223,6 +234,14 @@ export class ArbitrageExecutor implements IStrategyExecutor {
 
   // Round-robin leg selection: track last bought leg per bot to alternate YES/NO
   private lastBoughtLeg: Map<string, 'YES' | 'NO'> = new Map();
+
+  /**
+   * Clean up state for a deleted bot to prevent memory leaks
+   */
+  cleanupBot(botId: string): void {
+    this.botCooldowns.delete(botId);
+    this.lastBoughtLeg.delete(botId);
+  }
 
   // Get or initialize cooldown state for a specific bot
   private getCooldowns(botId: string): { lastYesOrderTime: number; lastNoOrderTime: number } {

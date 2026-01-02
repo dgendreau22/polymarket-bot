@@ -33,6 +33,7 @@ import {
   getBotTradeStats,
   rowToTrade,
 } from '../persistence/TradeRepository';
+import { cleanupBotState } from '../strategies/registry';
 import {
   getOpenOrdersByBotId,
   cancelAllBotOrders,
@@ -266,6 +267,9 @@ class BotManager {
     if (bot && bot.isRunning) {
       throw new Error('Cannot delete a running bot. Stop it first.');
     }
+
+    // Clean up any per-bot state in strategy executors (prevents memory leaks)
+    cleanupBotState(botId);
 
     // Delete from database (also deletes trades and positions)
     const deleted = deleteBotRecord(botId);
