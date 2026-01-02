@@ -24,9 +24,11 @@ function formatStrategyName(slug: string): string {
 export function BotCard({ bot, onStateChange }: BotCardProps) {
   const [deleting, setDeleting] = useState(false);
   const pnl = parseFloat(bot.metrics.totalPnl);
-  const positionSize = parseFloat(bot.position.size);
+  // Use totalPositionSize for arbitrage (YES + NO), fallback to single position
+  const positionSize = bot.totalPositionSize ?? parseFloat(bot.position.size);
   const avgPrice = parseFloat(bot.position.avgEntryPrice);
   const strategyName = formatStrategyName(bot.config.strategySlug);
+  const isArbitrage = bot.config.strategySlug === 'arbitrage';
 
   const handleDelete = async () => {
     if (!confirm(`Are you sure you want to delete this ${strategyName} bot? This will also delete all associated trades.`)) {
@@ -80,9 +82,13 @@ export function BotCard({ bot, onStateChange }: BotCardProps) {
         <div className="bg-muted/50 rounded p-2">
           <p className="text-xs text-muted-foreground">Position</p>
           <p className="font-medium">
-            {positionSize > 0 ? `${positionSize.toFixed(2)} YES` : "None"}
+            {positionSize > 0
+              ? isArbitrage
+                ? `${positionSize.toFixed(2)}`
+                : `${positionSize.toFixed(2)} YES`
+              : "None"}
           </p>
-          {positionSize > 0 && (
+          {positionSize > 0 && !isArbitrage && (
             <p className="text-xs text-muted-foreground">
               @ ${avgPrice.toFixed(4)}
             </p>

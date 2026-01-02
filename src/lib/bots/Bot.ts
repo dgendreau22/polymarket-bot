@@ -49,6 +49,7 @@ export class Bot {
   private updatedAt: Date;
   private startedAt?: Date;
   private stoppedAt?: Date;
+  private marketEndTime?: Date;
 
   private intervalId?: NodeJS.Timeout;
   private eventHandlers: BotEventHandler[] = [];
@@ -170,6 +171,9 @@ export class Bot {
     this.state = 'running';
     this.startedAt = new Date();
     this.updatedAt = new Date();
+
+    // Fetch market end time for time-based position scaling
+    await this.fetchMarketEndTime();
 
     // Fetch initial price from API before starting
     await this.fetchInitialPrice();
@@ -409,6 +413,37 @@ export class Bot {
     } catch (error) {
       console.error(`[Bot ${this.id}] Failed to fetch initial price:`, error);
       // Continue with default price
+    }
+  }
+
+  /**
+   * Fetch market end time from Gamma API for time-based position scaling
+   */
+  private async fetchMarketEndTime(): Promise<void> {
+    const marketId = this.config.marketId;
+    if (!marketId) {
+      console.warn(`[Bot ${this.id.slice(0, 8)}] No marketId configured, time-based scaling disabled`);
+      return;
+    }
+
+    try {
+      const GAMMA_HOST = process.env.POLYMARKET_GAMMA_HOST || 'https://gamma-api.polymarket.com';
+      const response = await fetch(`${GAMMA_HOST}/markets/${encodeURIComponent(marketId)}`);
+
+      if (response.ok) {
+        const market = await response.json();
+        if (market.endDateIso) {
+          this.marketEndTime = new Date(market.endDateIso);
+          console.log(`[Bot ${this.id.slice(0, 8)}] Market ends at: ${this.marketEndTime.toISOString()}`);
+        } else {
+          console.log(`[Bot ${this.id.slice(0, 8)}] Market has no end date, time-based scaling disabled`);
+        }
+      } else {
+        console.warn(`[Bot ${this.id.slice(0, 8)}] Failed to fetch market data: ${response.status}`);
+      }
+    } catch (error) {
+      console.warn(`[Bot ${this.id.slice(0, 8)}] Failed to fetch market end time:`, error);
+      // Continue without time-based scaling
     }
   }
 
@@ -701,6 +736,8 @@ export class Bot {
     let pendingSellQuantity = 0;
     let yesPendingBuy = 0;
     let noPendingBuy = 0;
+    let yesPendingBuyValue = 0;  // sum of (qty * price) for weighted avg
+    let noPendingBuyValue = 0;   // sum of (qty * price) for weighted avg
 
     // Get market prices for fillability check (arbitrage only)
     const yesPricesForFilter = isArbitrage ? this.getYesPrices() : null;
@@ -726,8 +763,10 @@ export class Bot {
           if (isFillable) {
             if (order.outcome === 'YES') {
               yesPendingBuy += remainingQty;
+              yesPendingBuyValue += remainingQty * orderPrice;
             } else {
               noPendingBuy += remainingQty;
+              noPendingBuyValue += remainingQty * orderPrice;
             }
           } else {
             // Log phantom orders for debugging
@@ -735,10 +774,13 @@ export class Bot {
           }
         } else {
           // Non-arbitrage: count all pending orders
+          const orderPriceNonArb = parseFloat(order.price);
           if (order.outcome === 'YES') {
             yesPendingBuy += remainingQty;
+            yesPendingBuyValue += remainingQty * orderPriceNonArb;
           } else {
             noPendingBuy += remainingQty;
+            noPendingBuyValue += remainingQty * orderPriceNonArb;
           }
         }
       } else {
@@ -762,12 +804,17 @@ export class Bot {
       pendingSellQuantity,
       yesPendingBuy,
       noPendingBuy,
+      yesPendingAvgPrice: yesPendingBuy > 0 ? yesPendingBuyValue / yesPendingBuy : 0,
+      noPendingAvgPrice: noPendingBuy > 0 ? noPendingBuyValue / noPendingBuy : 0,
       // Multi-asset fields
       positions: positions.length > 0 ? positions : undefined,
       noAssetId: this.config.noAssetId,
       noOrderBook: this.noOrderBook || undefined,
       yesPrices: this.getYesPrices(),
       noPrices: this.getNoPrices(),
+      // Time-based fields for position scaling
+      botStartTime: this.startedAt,
+      marketEndTime: this.marketEndTime,
     };
 
     // Execute strategy
@@ -1127,6 +1174,13 @@ export class Bot {
    * Convert to BotInstance
    */
   toInstance(): BotInstance {
+    // Calculate total position size from all positions in DB (for arbitrage: YES + NO)
+    const positionRows = getPositionsByBotId(this.id);
+    const totalPositionSize = positionRows.reduce(
+      (sum, row) => sum + parseFloat(row.size),
+      0
+    );
+
     return {
       config: { ...this.config },
       state: this.state,
@@ -1136,6 +1190,7 @@ export class Bot {
       updatedAt: this.updatedAt,
       startedAt: this.startedAt,
       stoppedAt: this.stoppedAt,
+      totalPositionSize,
     };
   }
 

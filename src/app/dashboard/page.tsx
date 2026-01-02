@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { BotList, BotCreateModal } from "@/components/bots";
-import { RefreshCw, AlertCircle, Wallet, DollarSign, Search, ChevronLeft, ChevronRight, Bot, Plus, TrendingUp, Briefcase } from "lucide-react";
+import { RefreshCw, AlertCircle, Wallet, DollarSign, Search, ChevronLeft, ChevronRight, Bot, Plus, TrendingUp, Briefcase, Timer } from "lucide-react";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import type { BotInstance } from "@/lib/bots/types";
 
@@ -220,6 +220,15 @@ export default function DashboardPage() {
             </div>
 
             <div className="flex items-center gap-4">
+              {/* Orchestrator Link */}
+              <Link
+                href="/orchestrator"
+                className="flex items-center gap-2 px-3 py-1.5 rounded-md border bg-background hover:bg-accent transition-colors"
+              >
+                <Timer className="w-4 h-4 text-orange-500" />
+                <span className="text-sm font-medium">BTC 15m</span>
+              </Link>
+
               {/* Theme Toggle */}
               <ThemeToggle />
 

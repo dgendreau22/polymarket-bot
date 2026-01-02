@@ -208,16 +208,21 @@ export class MarketMakerExecutor implements IStrategyExecutor {
  * Algorithm:
  * 1. Always prioritize the LAGGING leg (smaller position) to balance
  * 2. Dynamic maxPosition: Leading leg capped at maxPosition, lagging can exceed to catch up
- * 3. Projected cost check: Ensure avg cost sum < $1 AFTER new order would fill
+ * 3. Projected cost check (wouldCostBeValid): Ensure avg cost sum < $1 AFTER new order would fill
  * 4. Adaptive orders: Passive (below bid) normally, aggressive (at ask) when imbalance > 50%
  * 5. Order throttling: Cooldown period per leg to prevent burst trading
- * 6. Hard price ceiling: Never buy a leg if its ask price > 0.50
+ * 6. Time-based scaling: maxPosition decreases as market approaches close
+ * 7. Close-out mode: In last 10% of time, force hedging on lagging leg
  */
 export class ArbitrageExecutor implements IStrategyExecutor {
   // Order throttling: track last order time per leg PER BOT to prevent burst trading
   // Using a Map keyed by botId so multiple bots don't share cooldown state
   private botCooldowns: Map<string, { lastYesOrderTime: number; lastNoOrderTime: number }> = new Map();
-  private readonly ORDER_COOLDOWN_MS = 3000; // 3 second cooldown per leg
+  private readonly NORMAL_COOLDOWN_MS = 3000; // 3 second cooldown per leg in normal mode
+  private readonly CLOSEOUT_COOLDOWN_MS = 500; // 500ms cooldown in close-out mode (6x faster)
+
+  // Round-robin leg selection: track last bought leg per bot to alternate YES/NO
+  private lastBoughtLeg: Map<string, 'YES' | 'NO'> = new Map();
 
   // Get or initialize cooldown state for a specific bot
   private getCooldowns(botId: string): { lastYesOrderTime: number; lastNoOrderTime: number } {
@@ -253,7 +258,10 @@ export class ArbitrageExecutor implements IStrategyExecutor {
     return (currentSize * currentAvg + addSize * addPrice) / (currentSize + addSize);
   }
 
-  // Check if adding a position would keep combined avg cost under $1
+  // Check if adding a position would keep combined avg cost under threshold
+  // Using $0.98 to ensure 2% minimum profit margin on matched pairs
+  private readonly PROFIT_THRESHOLD = 0.98;
+
   private wouldCostBeValid(
     yesSize: number, yesAvg: number,
     noSize: number, noAvg: number,
@@ -269,9 +277,14 @@ export class ArbitrageExecutor implements IStrategyExecutor {
       projectedNoAvg = this.getProjectedAvg(noSize, noAvg, addSize, addPrice);
     }
 
-    // Combined avg cost must be under $1 for guaranteed profit
+    // Combined avg cost must be under threshold for guaranteed profit margin
     const combinedAvg = projectedYesAvg + projectedNoAvg;
-    return combinedAvg < 1.0;
+
+    if (combinedAvg >= this.PROFIT_THRESHOLD) {
+      console.log(`[Arb] BLOCKED: Projected combined $${combinedAvg.toFixed(3)} >= $${this.PROFIT_THRESHOLD}`);
+      return false;
+    }
+    return true;
   }
 
   async execute(context: StrategyContext): Promise<StrategySignal | null> {
@@ -288,10 +301,46 @@ export class ArbitrageExecutor implements IStrategyExecutor {
 
     // Configuration
     const orderSize = parseFloat(String(config.orderSize || '10'));
-    const legEntryThreshold = (config.legEntryThreshold as number) || 0.02;
     const maxPositionPerLeg = parseFloat(String(config.maxPosition || '100'));
     const imbalanceThreshold = 0.5; // 50% imbalance triggers aggressive mode
-    const minProfitMargin = (config.minProfitMargin as number) || 0.05; // 5% minimum profit
+
+    // Time-based maxPosition scaling
+    // As market approaches close, reduce maxPosition to ensure hedging
+    let scaledMaxPosition = maxPositionPerLeg;
+    let timeProgress = 0;
+
+    if (context.botStartTime && context.marketEndTime) {
+      const now = Date.now();
+      const startTime = context.botStartTime.getTime();
+      const endTime = context.marketEndTime.getTime();
+      const totalDuration = endTime - startTime;
+
+      if (totalDuration > 0 && now >= startTime) {
+        const elapsed = now - startTime;
+        timeProgress = Math.min(1, Math.max(0, elapsed / totalDuration));
+        const timeRemaining = 1 - timeProgress;
+
+        // Scale maxPosition linearly with time remaining
+        // At start: 100% of maxPosition, at end: 0% (must be hedged)
+        scaledMaxPosition = Math.floor(maxPositionPerLeg * timeRemaining);
+
+        console.log(
+          `[Arb] Time: ${(timeProgress * 100).toFixed(1)}% elapsed, ` +
+          `maxPosition: ${maxPositionPerLeg} → ${scaledMaxPosition}`
+        );
+      }
+    }
+
+    // Close-out mode: force hedging in last 10% of market time
+    const CLOSE_OUT_THRESHOLD = 0.90;  // Activate at 90% time elapsed
+    const isCloseOutMode = timeProgress >= CLOSE_OUT_THRESHOLD;
+
+    if (isCloseOutMode) {
+      console.log(
+        `[Arb] CLOSE-OUT MODE: ${((1 - timeProgress) * 100).toFixed(1)}% time remaining, ` +
+        `forcing hedge on lagging leg`
+      );
+    }
 
     // Get tick size
     const tick = tickSize ? parseFloat(tickSize.tick_size) : 0.01;
@@ -310,72 +359,25 @@ export class ArbitrageExecutor implements IStrategyExecutor {
       return null;
     }
 
-    // Extract YES and NO positions (needed for dynamic ceiling calculation)
+    // Extract YES and NO positions
     const yesPosition = positions?.find(p => p.outcome === 'YES');
     const noPosition = positions?.find(p => p.outcome === 'NO');
     const yesSizeForCeiling = yesPosition ? parseFloat(yesPosition.size) : 0;
     const noSizeForCeiling = noPosition ? parseFloat(noPosition.size) : 0;
-    const yesAvgForCeiling = yesPosition ? parseFloat(yesPosition.avgEntryPrice) : 0;
-    const noAvgForCeiling = noPosition ? parseFloat(noPosition.avgEntryPrice) : 0;
 
-    // SAFETY CHECK 1: Dynamic price ceiling based on existing position
-    // If we have a position on one leg, allow higher price on other leg to complete hedge
-    const maxCombinedCost = 1.0 - minProfitMargin; // e.g., 0.95 for 5% profit
-    const defaultMaxLegPrice = 0.50; // Default ceiling for initial entries
+    // Check if we're in initial building mode (neither leg has reached scaledMaxPosition)
+    const maxPositionReached = yesSizeForCeiling >= scaledMaxPosition || noSizeForCeiling >= scaledMaxPosition;
+    const inInitialBuildingMode = !maxPositionReached;
 
-    // Dynamic ceiling: if we have position on one leg, allow the other leg
-    // up to a price that still guarantees minProfitMargin
-    // Use Math.max to prevent negative ceiling if existing avg is too high (bad entry)
-    const yesMaxPrice = noAvgForCeiling > 0
-      ? Math.max(0.01, maxCombinedCost - noAvgForCeiling)  // If have NO at 0.40, YES max = 0.55
-      : defaultMaxLegPrice;                                 // No position yet, use default
-
-    const noMaxPrice = yesAvgForCeiling > 0
-      ? Math.max(0.01, maxCombinedCost - yesAvgForCeiling)  // If have YES at 0.40, NO max = 0.55
-      : defaultMaxLegPrice;                                  // No position yet, use default
-
-    const yesAboveCeiling = yesBestAsk > yesMaxPrice;
-    const noAboveCeiling = noBestAsk > noMaxPrice;
-
-    if (yesAboveCeiling && noAboveCeiling) {
-      console.log(
-        `[Arb] Both legs above dynamic ceiling ` +
-        `(YES=${yesBestAsk.toFixed(3)} > ${yesMaxPrice.toFixed(2)}, NO=${noBestAsk.toFixed(3)} > ${noMaxPrice.toFixed(2)}), skipping`
-      );
-      return null;
-    }
-
-    // SAFETY CHECK 2: Combined ask cost must allow minimum profit (for new entries)
-    const combinedCurrentAsk = yesBestAsk + noBestAsk;
-    if (combinedCurrentAsk > maxCombinedCost) {
-      console.log(`[Arb] Combined ask ${combinedCurrentAsk.toFixed(3)} > max ${maxCombinedCost.toFixed(2)}, no profitable entry available`);
-      // Don't return null - we might still want to balance if we have existing position
-    }
-
-    // SAFETY CHECK 3: Block buying cheap leg if expensive leg is above ceiling AND we're already imbalanced
-    // This prevents unlimited accumulation when we can't hedge
-    if (noAboveCeiling && !yesAboveCeiling && yesSizeForCeiling >= noSizeForCeiling) {
-      // NO is above ceiling, YES is cheap, and we have more YES than NO
-      // Can't buy NO to hedge, so don't accumulate more YES
-      console.log(
-        `[Arb] NO above ceiling (${noBestAsk.toFixed(2)} > ${noMaxPrice.toFixed(2)}), ` +
-        `YES=${yesSizeForCeiling.toFixed(0)} >= NO=${noSizeForCeiling.toFixed(0)}, blocking all buys until NO affordable`
-      );
-      return null;
-    }
-    if (yesAboveCeiling && !noAboveCeiling && noSizeForCeiling >= yesSizeForCeiling) {
-      // YES is above ceiling, NO is cheap, and we have more NO than YES
-      // Can't buy YES to hedge, so don't accumulate more NO
-      console.log(
-        `[Arb] YES above ceiling (${yesBestAsk.toFixed(2)} > ${yesMaxPrice.toFixed(2)}), ` +
-        `NO=${noSizeForCeiling.toFixed(0)} >= YES=${yesSizeForCeiling.toFixed(0)}, blocking all buys until YES affordable`
-      );
-      return null;
+    if (inInitialBuildingMode) {
+      console.log(`[Arb] Initial building mode (neither leg >= ${scaledMaxPosition})`);
     }
 
     // Get pending order quantities per asset (to include in position limit check)
     const yesPendingBuy = context.yesPendingBuy ?? 0;
     const noPendingBuy = context.noPendingBuy ?? 0;
+    const yesPendingAvgPrice = context.yesPendingAvgPrice ?? 0;
+    const noPendingAvgPrice = context.noPendingAvgPrice ?? 0;
 
     // Get current position sizes INCLUDING pending orders (for limit enforcement)
     // This prevents placing orders that would exceed limits when they fill
@@ -383,8 +385,26 @@ export class ArbitrageExecutor implements IStrategyExecutor {
     const noFilledSize = noPosition ? parseFloat(noPosition.size) : 0;
     const yesSize = yesFilledSize + yesPendingBuy;
     const noSize = noFilledSize + noPendingBuy;
-    const yesAvg = yesPosition ? parseFloat(yesPosition.avgEntryPrice) : 0;
-    const noAvg = noPosition ? parseFloat(noPosition.avgEntryPrice) : 0;
+    const yesFilledAvg = yesPosition ? parseFloat(yesPosition.avgEntryPrice) : 0;
+    const noFilledAvg = noPosition ? parseFloat(noPosition.avgEntryPrice) : 0;
+
+    // Calculate effective avg including pending orders (for wouldCostBeValid check)
+    // This prevents the race condition where one leg accumulates before the other fills
+    const yesEffectiveAvg = yesFilledSize > 0
+      ? (yesPendingBuy > 0
+        ? (yesFilledSize * yesFilledAvg + yesPendingBuy * yesPendingAvgPrice) / (yesFilledSize + yesPendingBuy)
+        : yesFilledAvg)
+      : yesPendingAvgPrice;
+
+    const noEffectiveAvg = noFilledSize > 0
+      ? (noPendingBuy > 0
+        ? (noFilledSize * noFilledAvg + noPendingBuy * noPendingAvgPrice) / (noFilledSize + noPendingBuy)
+        : noFilledAvg)
+      : noPendingAvgPrice;
+
+    // Use effective averages for all profitability checks
+    const yesAvg = yesEffectiveAvg;
+    const noAvg = noEffectiveAvg;
 
     // Calculate combined metrics
     const combinedAskCost = yesBestAsk + noBestAsk;
@@ -424,57 +444,51 @@ export class ArbitrageExecutor implements IStrategyExecutor {
     const newFilledDiffIfBuyYes = Math.abs((yesFilledSize + orderSize) - noFilledSize);
     const newFilledDiffIfBuyNo = Math.abs(yesFilledSize - (noFilledSize + orderSize));
 
-    // Can only buy if BOTH total and filled difference checks pass
-    // This ensures that even if pending orders haven't filled, we don't exceed the limit
-    const yesCanBuy = newDiffIfBuyYes <= maxPositionPerLeg && newFilledDiffIfBuyYes <= maxPositionPerLeg;
-    const noCanBuy = newDiffIfBuyNo <= maxPositionPerLeg && newFilledDiffIfBuyNo <= maxPositionPerLeg;
+    // Lagging leg can ALWAYS buy (reduces imbalance toward hedge)
+    // Leading leg blocked if it would increase diff beyond scaledMaxPosition
+    const yesCanBuy = yesIsLagging
+      ? true  // Always allow lagging leg to catch up
+      : (newDiffIfBuyYes <= scaledMaxPosition && newFilledDiffIfBuyYes <= scaledMaxPosition);
+
+    const noCanBuy = !yesIsLagging
+      ? true  // Always allow lagging leg to catch up (NO is lagging)
+      : (newDiffIfBuyNo <= scaledMaxPosition && newFilledDiffIfBuyNo <= scaledMaxPosition);
 
     // Use these for entry decisions
     const yesNeedsMore = yesCanBuy;
     const noNeedsMore = noCanBuy;
 
-    // Entry price threshold (buy below this price)
-    const targetPrice = 0.5 - legEntryThreshold;
-
-    // Calculate discounts from 50%
-    const yesDiscount = 0.5 - yesBestAsk;
-    const noDiscount = 0.5 - noBestAsk;
-
     console.log(
       `[Arb] Lagging=${laggingLeg} Imbalance=${(imbalance * 100).toFixed(1)}% ${isLargeImbalance ? '(AGGRESSIVE)' : '(passive)'} | ` +
-      `FilledDiff=${filledDiff.toFixed(0)} TotalDiff=${sizeDiff.toFixed(0)} / max=${maxPositionPerLeg} | CanBuy: YES=${yesCanBuy} NO=${noCanBuy}`
-    );
-    console.log(
-      `[Arb] Discounts: YES=${(yesDiscount * 100).toFixed(2)}% NO=${(noDiscount * 100).toFixed(2)}% | ` +
-      `Target < ${targetPrice.toFixed(2)}`
+      `FilledDiff=${filledDiff.toFixed(0)} TotalDiff=${sizeDiff.toFixed(0)} / max=${scaledMaxPosition} | CanBuy: YES=${yesCanBuy} NO=${noCanBuy}`
     );
 
     // SAFETY CHECK 4: Order throttling - check cooldown per leg (per-bot)
+    // Use faster cooldown in close-out mode for urgent hedging
     const now = Date.now();
     const botId = bot.config.id;
     const cooldowns = this.getCooldowns(botId);
-    const yesOnCooldown = now - cooldowns.lastYesOrderTime < this.ORDER_COOLDOWN_MS;
-    const noOnCooldown = now - cooldowns.lastNoOrderTime < this.ORDER_COOLDOWN_MS;
-    if (yesOnCooldown && noOnCooldown) {
+    const effectiveCooldown = isCloseOutMode ? this.CLOSEOUT_COOLDOWN_MS : this.NORMAL_COOLDOWN_MS;
+    const yesOnCooldown = now - cooldowns.lastYesOrderTime < effectiveCooldown;
+    const noOnCooldown = now - cooldowns.lastNoOrderTime < effectiveCooldown;
+    if (yesOnCooldown && noOnCooldown && !isCloseOutMode) {
       console.log(`[Arb] Both legs on cooldown, skipping cycle`);
       return null;
     }
 
-    // Helper: Check if a leg can be bought (cooldown + price ceiling + position limit)
+    // Helper: Check if a leg can be bought (cooldown + position limit)
     const canBuyLeg = (leg: 'YES' | 'NO'): boolean => {
       const onCooldown = leg === 'YES' ? yesOnCooldown : noOnCooldown;
-      const aboveCeiling = leg === 'YES' ? yesAboveCeiling : noAboveCeiling;
       const canBuy = leg === 'YES' ? yesNeedsMore : noNeedsMore;
+      const isLagging = leg === laggingLeg;
 
-      if (onCooldown) {
+      // In close-out mode, bypass cooldown for lagging leg (urgent hedging)
+      if (onCooldown && !(isCloseOutMode && isLagging)) {
         console.log(`[Arb] ${leg} on cooldown, skipping`);
         return false;
       }
-      if (aboveCeiling) {
-        const maxPrice = leg === 'YES' ? yesMaxPrice : noMaxPrice;
-        console.log(`[Arb] ${leg} above price ceiling (${leg === 'YES' ? yesBestAsk : noBestAsk} > ${maxPrice.toFixed(2)}), skipping`);
-        return false;
-      }
+
+      // Position limit already allows lagging leg (see yesCanBuy/noCanBuy)
       if (!canBuy) {
         return false;
       }
@@ -483,71 +497,77 @@ export class ArbitrageExecutor implements IStrategyExecutor {
 
     // Helper: Generate signal and update cooldown timestamp (per-bot)
     const generateSignal = (leg: 'YES' | 'NO', aggressive: boolean): StrategySignal => {
+      // In close-out mode, always use aggressive pricing for fills
+      const useAggressivePricing = aggressive || isCloseOutMode;
+
       if (leg === 'YES') {
         cooldowns.lastYesOrderTime = now;
-        return this.createBuySignal('YES', yesBestBid, yesBestAsk, orderSize, tick, potentialProfit, aggressive);
+        return this.createBuySignal('YES', yesBestBid, yesBestAsk, orderSize, tick, potentialProfit, useAggressivePricing);
       } else {
         cooldowns.lastNoOrderTime = now;
-        return this.createBuySignal('NO', noBestBid, noBestAsk, orderSize, tick, potentialProfit, aggressive);
+        return this.createBuySignal('NO', noBestBid, noBestAsk, orderSize, tick, potentialProfit, useAggressivePricing);
       }
     };
+
+    // PRIORITY 0: Close-out mode - force hedge the lagging leg with larger orders
+    if (isCloseOutMode && sizeDiff > 0) {
+      if (canBuyLeg(laggingLeg)) {
+        // Use 3x order size in close-out mode for faster hedging (capped at remaining imbalance)
+        const closeOutSize = Math.min(sizeDiff, orderSize * 3);
+        console.log(`[Arb] CLOSE-OUT: Buying ${closeOutSize.toFixed(0)} ${laggingLeg} to hedge (imbalance=${sizeDiff.toFixed(0)})`);
+
+        // Generate signal with closeOutSize
+        if (laggingLeg === 'YES') {
+          cooldowns.lastYesOrderTime = now;
+          return this.createBuySignal('YES', yesBestBid, yesBestAsk, closeOutSize, tick, potentialProfit, true);
+        } else {
+          cooldowns.lastNoOrderTime = now;
+          return this.createBuySignal('NO', noBestBid, noBestAsk, closeOutSize, tick, potentialProfit, true);
+        }
+      }
+    }
 
     // PRIORITY 1: Balance the lagging leg first (if one leg has position)
     if (totalSize > 0) {
       if (laggingLeg === 'YES' && canBuyLeg('YES')) {
-        // Check if price meets threshold OR we're in aggressive mode
-        const shouldBuy = yesBestAsk <= targetPrice || (isLargeImbalance && yesDiscount > -0.1);
-        if (shouldBuy) {
-          const buyPrice = isLargeImbalance ? yesBestAsk : yesBestBid;
-          // Check projected cost constraint
-          if (this.wouldCostBeValid(yesSize, yesAvg, noSize, noAvg, 'YES', orderSize, buyPrice)) {
-            return generateSignal('YES', isLargeImbalance);
-          } else {
-            console.log(`[Arb] Skipping UP buy - would push combined avg >= $1`);
-          }
+        const buyPrice = isLargeImbalance ? yesBestAsk : yesBestBid;
+        // Entry decision based solely on whether new position would be profitable
+        if (this.wouldCostBeValid(yesSize, yesAvg, noSize, noAvg, 'YES', orderSize, buyPrice)) {
+          return generateSignal('YES', isLargeImbalance);
+        } else {
+          console.log(`[Arb] Skipping YES buy - would push combined avg >= $1`);
         }
       } else if (laggingLeg === 'NO' && canBuyLeg('NO')) {
-        const shouldBuy = noBestAsk <= targetPrice || (isLargeImbalance && noDiscount > -0.1);
-        if (shouldBuy) {
-          const buyPrice = isLargeImbalance ? noBestAsk : noBestBid;
-          if (this.wouldCostBeValid(yesSize, yesAvg, noSize, noAvg, 'NO', orderSize, buyPrice)) {
-            return generateSignal('NO', isLargeImbalance);
-          } else {
-            console.log(`[Arb] Skipping DOWN buy - would push combined avg >= $1`);
-          }
-        }
-      }
-    }
-
-    // PRIORITY 2: Enter either leg if price is favorable (initial entry or balanced accumulation)
-    // When both legs are equal size, prioritize by discount
-    if (canBuyLeg('YES') && yesBestAsk <= targetPrice) {
-      const buyPrice = yesBestBid;
-      if (this.wouldCostBeValid(yesSize, yesAvg, noSize, noAvg, 'YES', orderSize, buyPrice)) {
-        return generateSignal('YES', false);
-      }
-    }
-
-    if (canBuyLeg('NO') && noBestAsk <= targetPrice) {
-      const buyPrice = noBestBid;
-      if (this.wouldCostBeValid(yesSize, yesAvg, noSize, noAvg, 'NO', orderSize, buyPrice)) {
-        return generateSignal('NO', false);
-      }
-    }
-
-    // PRIORITY 3: Place passive order on lagging leg even if not at threshold
-    // Only if we have imbalance and the price is at least reasonable (above 0)
-    if (totalSize > 0 && isLargeImbalance) {
-      if (laggingLeg === 'YES' && canBuyLeg('YES') && yesDiscount > -0.1) {
-        const buyPrice = yesBestBid; // Passive
-        if (this.wouldCostBeValid(yesSize, yesAvg, noSize, noAvg, 'YES', orderSize, buyPrice)) {
-          return generateSignal('YES', false);
-        }
-      } else if (laggingLeg === 'NO' && canBuyLeg('NO') && noDiscount > -0.1) {
-        const buyPrice = noBestBid;
+        const buyPrice = isLargeImbalance ? noBestAsk : noBestBid;
         if (this.wouldCostBeValid(yesSize, yesAvg, noSize, noAvg, 'NO', orderSize, buyPrice)) {
-          return generateSignal('NO', false);
+          return generateSignal('NO', isLargeImbalance);
+        } else {
+          console.log(`[Arb] Skipping NO buy - would push combined avg >= $1`);
         }
+      }
+    }
+
+    // PRIORITY 2: Enter either leg (initial entry or balanced accumulation)
+    // Use round-robin to alternate between YES and NO, preventing one-sided accumulation
+    const lastLeg = this.lastBoughtLeg.get(botId) ?? 'NO';
+    const firstLeg: 'YES' | 'NO' = lastLeg === 'YES' ? 'NO' : 'YES';
+    const secondLeg: 'YES' | 'NO' = firstLeg === 'YES' ? 'NO' : 'YES';
+
+    // Try first leg (opposite of last bought)
+    if (canBuyLeg(firstLeg)) {
+      const buyPrice = firstLeg === 'YES' ? yesBestBid : noBestBid;
+      if (this.wouldCostBeValid(yesSize, yesAvg, noSize, noAvg, firstLeg, orderSize, buyPrice)) {
+        this.lastBoughtLeg.set(botId, firstLeg);
+        return generateSignal(firstLeg, false);
+      }
+    }
+
+    // Try second leg (same as last bought, as fallback)
+    if (canBuyLeg(secondLeg)) {
+      const buyPrice = secondLeg === 'YES' ? yesBestBid : noBestBid;
+      if (this.wouldCostBeValid(yesSize, yesAvg, noSize, noAvg, secondLeg, orderSize, buyPrice)) {
+        this.lastBoughtLeg.set(botId, secondLeg);
+        return generateSignal(secondLeg, false);
       }
     }
 

@@ -427,6 +427,11 @@ export function fillMarketableOrders(
   const yesPrices = getBestPrices(yesOrderBook);
   const noPrices = getBestPrices(noOrderBook || null);
 
+  // Debug: Log order book state
+  if (yesPrices.bestAsk === Infinity || noPrices.bestAsk === Infinity) {
+    console.log(`[OrderMatcher] WARNING: Order book missing - YES ask=${yesPrices.bestAsk === Infinity ? 'MISSING' : yesPrices.bestAsk}, NO ask=${noPrices.bestAsk === Infinity ? 'MISSING' : noPrices.bestAsk}`);
+  }
+
   // Re-fetch open orders each iteration to get fresh state
   let openOrders = getOpenOrdersByBotId(botId);
 
@@ -450,6 +455,15 @@ export function fillMarketableOrders(
     } else if (order.side === 'SELL' && prices.bestBid > 0 && orderPrice <= prices.bestBid) {
       shouldFill = true;
       fillPrice = prices.sortedBids[0].price;
+    }
+
+    // Debug: Log why order isn't filling
+    if (!shouldFill && order.side === 'BUY' && orderPrice > 0.40) {
+      console.log(
+        `[OrderMatcher] ${order.outcome} BUY @ ${orderPrice} NOT filling: ` +
+        `bestAsk=${prices.bestAsk === Infinity ? 'MISSING' : prices.bestAsk.toFixed(4)}, ` +
+        `condition: ${orderPrice} >= ${prices.bestAsk} = ${orderPrice >= prices.bestAsk}`
+      );
     }
 
     if (shouldFill) {

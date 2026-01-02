@@ -857,6 +857,12 @@ export default function BotDetailPage() {
               const expectedProfit = matchedPairs > 0 ? matchedPairs * (1 - combinedEntry) : 0;
               const roi = combinedEntry > 0 ? ((1 - combinedEntry) / combinedEntry) * 100 : 0;
 
+              // Unhedged risk - potential loss from unmatched shares
+              const unhedgedShares = Math.abs(upSize - downSize);
+              const unhedgedLeg = upSize > downSize ? 'YES' : 'NO';
+              const unhedgedAvgPrice = upSize > downSize ? upAvg : downAvg;
+              const unhedgedRisk = unhedgedShares * unhedgedAvgPrice;
+
               return upSize > 0 || downSize > 0 ? (
                 <div className="space-y-4">
                   <div className="overflow-x-auto">
@@ -911,7 +917,9 @@ export default function BotDetailPage() {
                         <tr className="bg-muted/30 font-medium">
                           <td className="py-2.5 pr-3">Total</td>
                           <td className="py-2.5 pr-3 text-right font-mono">{(upSize + downSize).toFixed(2)}</td>
-                          <td className="py-2.5 pr-3 text-right font-mono text-muted-foreground">—</td>
+                          <td className="py-2.5 pr-3 text-right font-mono">
+                            {(upAvg > 0 || downAvg > 0) ? formatPrice(combinedEntry) : "—"}
+                          </td>
                           <td className="py-2.5 pr-3 text-right font-mono text-muted-foreground">—</td>
                           <td className={cn("py-2.5 pr-3 text-right font-mono", totalUnrealized >= 0 ? "text-green-500" : "text-red-500")}>
                             {upCurrentPrice > 0 || downCurrentPrice > 0 ? `${totalUnrealized >= 0 ? "+" : ""}$${totalUnrealized.toFixed(2)}` : "—"}
@@ -928,7 +936,7 @@ export default function BotDetailPage() {
                   </div>
 
                   {/* Arbitrage Metrics */}
-                  <div className="border-t pt-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                  <div className="border-t pt-4 grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
                     <div>
                       <p className="text-xs text-muted-foreground mb-1">Combined Cost</p>
                       <p className="font-mono font-medium text-lg">
@@ -949,6 +957,17 @@ export default function BotDetailPage() {
                         {expectedProfit >= 0 ? "+" : ""}${expectedProfit.toFixed(2)}
                         <span className="text-xs ml-1">({roi >= 0 ? "+" : ""}{roi.toFixed(1)}%)</span>
                       </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-1">Unhedged Risk</p>
+                      {unhedgedShares > 0 ? (
+                        <p className="font-mono font-medium text-lg text-yellow-500">
+                          -${unhedgedRisk.toFixed(2)}
+                          <span className="text-xs ml-1">({unhedgedShares.toFixed(0)} {unhedgedLeg})</span>
+                        </p>
+                      ) : (
+                        <p className="font-mono font-medium text-lg text-green-500">$0.00</p>
+                      )}
                     </div>
                   </div>
                 </div>
