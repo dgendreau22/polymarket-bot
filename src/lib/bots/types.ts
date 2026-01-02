@@ -38,6 +38,8 @@ export interface BotInstance {
   updatedAt: Date;
   startedAt?: Date;
   stoppedAt?: Date;
+  /** Total position size summed from all positions (for arbitrage: YES + NO) */
+  totalPositionSize?: number;
 }
 
 /** Database row for bot */
@@ -269,6 +271,10 @@ export interface StrategyContext {
   yesPendingBuy?: number;
   /** Pending BUY quantity for NO asset (arbitrage) */
   noPendingBuy?: number;
+  /** Weighted average price of pending YES BUY orders */
+  yesPendingAvgPrice?: number;
+  /** Weighted average price of pending NO BUY orders */
+  noPendingAvgPrice?: number;
   // Multi-asset fields (for arbitrage and other multi-leg strategies)
   /** All positions for this bot (YES and NO for arbitrage) */
   positions?: Position[];
@@ -280,6 +286,11 @@ export interface StrategyContext {
   yesPrices?: { bestBid: number; bestAsk: number };
   /** NO side best bid/ask prices */
   noPrices?: { bestBid: number; bestAsk: number };
+  // Time-based fields (for position scaling as market approaches close)
+  /** When the bot started running */
+  botStartTime?: Date;
+  /** When the market closes/expires */
+  marketEndTime?: Date;
 }
 
 /** Strategy signal output */

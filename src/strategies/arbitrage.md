@@ -34,7 +34,6 @@ In a perfect market, YES price + NO price = $1.00. When this sum is less than $1
 |------|------|---------|-----|-----|-------------|
 | orderSize | number | 10 | 1 | 1000 | Size per order (shares) |
 | maxPosition | number | 100 | 10 | 10000 | Max allowed difference between leg sizes (imbalance limit) |
-| legEntryThreshold | number | 0.02 | 0.01 | 0.10 | Discount from 0.50 required to enter a leg |
 
 ## Risk Management
 
@@ -51,21 +50,19 @@ In a perfect market, YES price + NO price = $1.00. When this sum is less than $1
 ```
 Priority 1: Balance lagging leg (if position exists)
 - If imbalance > 50%: Use AGGRESSIVE orders (at best ask)
-- Otherwise: Use passive orders (below best bid)
+- Otherwise: Use passive orders (at best bid)
 - Only if projected combined avg < $1.00
 
-Priority 2: Enter favorable leg (initial entry or balanced accumulation)
-- Enter YES if YES ask < 0.50 - legEntryThreshold
-- Enter NO if NO ask < 0.50 - legEntryThreshold
+Priority 2: Enter either leg (initial entry or balanced accumulation)
+- Enter any leg that passes position limits
 - Only if projected combined avg < $1.00
 
-Priority 3: Place passive order on lagging leg
-- Even if not at threshold, place passive bid to catch up
-- Only when large imbalance exists
+Entry Criterion:
+- wouldCostBeValid(): "If this order fills, will my new avg still be profitable?"
+- (new leg avg) + (other leg avg) < $1.00
 
 Safety checks:
 - Never place orders that would push combined avg >= $1.00
-- Never place orders that cross the spread (except aggressive mode)
 ```
 
 ## Imbalance Control

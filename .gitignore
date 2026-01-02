@@ -48,3 +48,10 @@ data/
 *.db
 *.db-wal
 *.db-shm
+
+# SQLite tools
+sqldiff.exe
+sqlite3.exe
+sqlite3_analyzer.exe
+sqlite3_rsync.exe
+sqlite-tools.zip
