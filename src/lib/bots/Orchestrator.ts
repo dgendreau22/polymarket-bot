@@ -57,6 +57,10 @@ export interface OrchestratorStatus {
   currentBotId: string | null;
   botCount: number;
   lastError: string | null;
+  /** Next scheduled market (shown even when a bot is active) */
+  nextMarket: ScheduledMarket | null;
+  /** When the next bot will be created */
+  nextMarketStartTime: Date | null;
 }
 
 /** Orchestrator events for SSE */
@@ -83,10 +87,20 @@ class Orchestrator {
     enabled: false,
   };
 
-  private currentMarket: ScheduledMarket | null = null;
-  private currentBotId: string | null = null;
-  private scheduledStartTime: Date | null = null;
-  private scheduledTimer: NodeJS.Timeout | null = null;
+  // Track the next scheduled market (waiting for bot start time)
+  private nextScheduledMarket: ScheduledMarket | null = null;
+  private nextScheduledStartTime: Date | null = null;
+  private nextScheduledTimer: NodeJS.Timeout | null = null;
+
+  // Track currently active/running market (bot is running)
+  private activeMarket: ScheduledMarket | null = null;
+
+  // Track all scheduled market IDs to avoid double-scheduling
+  private scheduledMarketIds: Set<string> = new Set();
+
+  // Track running bots
+  private runningBotIds: Set<string> = new Set();
+
   private searchInterval: NodeJS.Timeout | null = null;
   private botHistory: OrchestratorBotInfo[] = [];
   private eventHandlers: OrchestratorEventHandler[] = [];
@@ -95,7 +109,7 @@ class Orchestrator {
   // Market discovery constants
   private readonly SEARCH_QUERY = 'Bitcoin Up or Down';
   private readonly MARKET_PATTERN = /Bitcoin Up or Down - (\w+ \d{1,2}), (\d{1,2}):(\d{2})(AM|PM)-(\d{1,2}):(\d{2})(AM|PM) ET/i;
-  private readonly SEARCH_INTERVAL_MS = 60000; // Check for new markets every minute
+  private readonly SEARCH_INTERVAL_MS = 30000; // Check for new markets every 30 seconds
   private readonly MIN_SEARCH_INTERVAL_MS = 5000; // Rate limit: 5 seconds between searches
 
   private lastSearchTime = 0;
@@ -116,16 +130,18 @@ class Orchestrator {
 
     this.config = { ...this.config, ...config, enabled: true };
     this.lastError = null;
+    this.scheduledMarketIds.clear();
+    this.runningBotIds.clear();
     this.setState('searching');
 
-    console.log(`[Orchestrator] Starting with strategy=${this.config.strategy}, mode=${this.config.mode}`);
+    console.log(`[Orchestrator] Starting with strategy=${this.config.strategy}, mode=${this.config.mode}, leadTime=${this.config.leadTimeMinutes}min`);
 
     // Begin market discovery
     await this.findAndScheduleNextMarket();
 
-    // Set up continuous search interval
+    // Set up continuous search interval to find and schedule upcoming markets
     this.searchInterval = setInterval(() => {
-      if (this.state === 'idle' || this.state === 'searching') {
+      if (this.config.enabled) {
         this.findAndScheduleNextMarket();
       }
     }, this.SEARCH_INTERVAL_MS);
@@ -140,17 +156,19 @@ class Orchestrator {
     this.config.enabled = false;
 
     // Clear timers
-    if (this.scheduledTimer) {
-      clearTimeout(this.scheduledTimer);
-      this.scheduledTimer = null;
+    if (this.nextScheduledTimer) {
+      clearTimeout(this.nextScheduledTimer);
+      this.nextScheduledTimer = null;
     }
     if (this.searchInterval) {
       clearInterval(this.searchInterval);
       this.searchInterval = null;
     }
 
-    this.currentMarket = null;
-    this.scheduledStartTime = null;
+    this.nextScheduledMarket = null;
+    this.nextScheduledStartTime = null;
+    this.activeMarket = null;
+    this.scheduledMarketIds.clear();
     this.setState('idle');
 
     console.log('[Orchestrator] Stopped');
@@ -160,14 +178,26 @@ class Orchestrator {
    * Get current orchestrator status
    */
   getStatus(): OrchestratorStatus {
+    // Find the first running bot ID for display
+    const runningBotId = this.runningBotIds.size > 0
+      ? Array.from(this.runningBotIds)[0]
+      : null;
+
+    // Show active market if running, otherwise show next scheduled market
+    const displayMarket = this.activeMarket || this.nextScheduledMarket;
+    const displayStartTime = this.activeMarket ? null : this.nextScheduledStartTime;
+
     return {
       state: this.state,
       config: { ...this.config },
-      currentMarket: this.currentMarket,
-      scheduledStartTime: this.scheduledStartTime,
-      currentBotId: this.currentBotId,
+      currentMarket: displayMarket,
+      scheduledStartTime: displayStartTime,
+      currentBotId: runningBotId,
       botCount: this.botHistory.length,
       lastError: this.lastError,
+      // Always provide next scheduled market info (even when active)
+      nextMarket: this.nextScheduledMarket,
+      nextMarketStartTime: this.nextScheduledStartTime,
     };
   }
 
@@ -203,6 +233,12 @@ class Orchestrator {
    * Find next Bitcoin 15-min market and schedule bot
    */
   private async findAndScheduleNextMarket(): Promise<void> {
+    // Don't search if we already have a market scheduled
+    // We only schedule the next market after the current scheduled one starts
+    if (this.nextScheduledMarket) {
+      return;
+    }
+
     // Rate limiting
     const now = Date.now();
     if (now - this.lastSearchTime < this.MIN_SEARCH_INTERVAL_MS) {
@@ -211,17 +247,21 @@ class Orchestrator {
     this.lastSearchTime = now;
 
     try {
-      console.log('[Orchestrator] Searching for next Bitcoin 15-min market...');
       const market = await this.discoverNextMarket();
 
       if (market) {
-        this.currentMarket = market;
-        this.emitEvent({ type: 'MARKET_FOUND', market, timestamp: new Date() });
-        console.log(`[Orchestrator] Found market: ${market.marketName}`);
+        // Check if already scheduled (shouldn't happen but safety check)
+        if (this.scheduledMarketIds.has(market.marketId)) {
+          return;
+        }
+
+        console.log(`[Orchestrator] Found new market to schedule: ${market.marketName}`);
         console.log(`[Orchestrator] Market starts at: ${market.startTime.toLocaleString()}`);
 
+        this.emitEvent({ type: 'MARKET_FOUND', market, timestamp: new Date() });
         await this.scheduleBot(market);
-      } else {
+      } else if (this.runningBotIds.size === 0 && !this.nextScheduledMarket) {
+        // Only show searching state if nothing is running or scheduled
         console.log('[Orchestrator] No upcoming market found, will retry...');
         this.setState('searching');
       }
@@ -229,8 +269,11 @@ class Orchestrator {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       console.error('[Orchestrator] Error finding market:', errorMsg);
       this.lastError = errorMsg;
-      this.setState('error');
-      this.emitEvent({ type: 'ERROR', error: errorMsg, timestamp: new Date() });
+      // Don't set error state if we have running bots - just log the error
+      if (this.runningBotIds.size === 0) {
+        this.setState('error');
+        this.emitEvent({ type: 'ERROR', error: errorMsg, timestamp: new Date() });
+      }
     }
   }
 
@@ -248,8 +291,15 @@ class Orchestrator {
     });
 
     const now = new Date();
-    let nextMarket: ScheduledMarket | null = null;
-    let earliestStart: Date | null = null;
+    const nowMs = now.getTime();
+    const leadTimeMs = this.config.leadTimeMinutes * 60 * 1000;
+    const MIN_REMAINING_MS = 2 * 60 * 1000; // Need at least 2 minutes remaining to join
+
+    // Collect all valid candidate markets
+    const candidates: Array<{
+      market: ScheduledMarket;
+      startTime: number;
+    }> = [];
 
     // Find events with markets matching our pattern
     const events = (results as { events?: Array<{ markets?: Array<{ question?: string; id?: string; conditionId?: string; clobTokenIds?: string | string[] }> }> }).events || [];
@@ -258,33 +308,48 @@ class Orchestrator {
       const markets = event.markets || [];
 
       for (const market of markets) {
+        const marketId = market.id || market.conditionId || '';
+
+        // Skip already scheduled markets
+        if (this.scheduledMarketIds.has(marketId)) continue;
+
         const marketName = market.question || '';
         const parsed = this.parseMarketName(marketName);
         if (!parsed) continue;
 
-        // Only consider markets starting in the future
-        if (parsed.startTime <= now) continue;
+        // Skip if market has ended or is ending soon
+        const timeUntilEnd = parsed.endTime.getTime() - nowMs;
+        if (timeUntilEnd < MIN_REMAINING_MS) continue;
 
-        // Find the earliest upcoming market
-        if (!earliestStart || parsed.startTime < earliestStart) {
-          earliestStart = parsed.startTime;
+        // Parse token IDs for asset IDs
+        const tokenIds = this.parseTokenIds(market.clobTokenIds);
 
-          // Parse token IDs for asset IDs
-          const tokenIds = this.parseTokenIds(market.clobTokenIds);
-
-          nextMarket = {
-            marketId: market.id || market.conditionId || '',
+        candidates.push({
+          market: {
+            marketId,
             marketName,
             startTime: parsed.startTime,
             endTime: parsed.endTime,
             assetId: tokenIds[0],
             noAssetId: tokenIds[1],
-          };
-        }
+          },
+          startTime: parsed.startTime.getTime(),
+        });
       }
     }
 
-    return nextMarket;
+    // Sort by start time ascending (earliest market first)
+    candidates.sort((a, b) => a.startTime - b.startTime);
+
+    // Log candidates for debugging
+    if (candidates.length > 0) {
+      console.log(`[Orchestrator] Found ${candidates.length} candidate markets:`);
+      candidates.slice(0, 5).forEach((c, i) => {
+        console.log(`  ${i + 1}. ${c.market.marketName} (starts: ${c.market.startTime.toLocaleString()})`);
+      });
+    }
+
+    return candidates.length > 0 ? candidates[0].market : null;
   }
 
   // ============================================================================
@@ -413,21 +478,32 @@ class Orchestrator {
    * Schedule bot creation X minutes before market start
    */
   private async scheduleBot(market: ScheduledMarket): Promise<void> {
+    // Mark this market as scheduled
+    this.scheduledMarketIds.add(market.marketId);
+
     const now = new Date();
     const leadTimeMs = this.config.leadTimeMinutes * 60 * 1000;
     const botStartTime = new Date(market.startTime.getTime() - leadTimeMs);
     const delayMs = botStartTime.getTime() - now.getTime();
 
     if (delayMs <= 0) {
-      // Market is about to start or already started, create bot now
-      console.log('[Orchestrator] Market starting soon, creating bot immediately');
+      // Bot start time has passed, create bot now
+      console.log('[Orchestrator] Bot start time reached, creating bot immediately');
       await this.createBot(market);
       return;
     }
 
-    // Schedule bot creation
-    this.scheduledStartTime = botStartTime;
-    this.setState('scheduled');
+    // Track as the next scheduled market (for UI display)
+    this.nextScheduledMarket = market;
+    this.nextScheduledStartTime = botStartTime;
+
+    // Update state based on whether we have running bots
+    if (this.runningBotIds.size > 0) {
+      this.setState('active'); // Show active if bots are running
+    } else {
+      this.setState('scheduled');
+    }
+
     this.emitEvent({
       type: 'BOT_SCHEDULED',
       botStartTime,
@@ -436,10 +512,15 @@ class Orchestrator {
     });
 
     const delaySeconds = Math.round(delayMs / 1000);
-    const delayMinutes = Math.round(delayMs / 60000);
-    console.log(`[Orchestrator] Bot scheduled to start at ${botStartTime.toLocaleString()} (in ${delayMinutes}m ${delaySeconds % 60}s)`);
+    const delayMinutes = Math.floor(delayMs / 60000);
+    console.log(`[Orchestrator] Bot for ${this.extractTimeWindow(market.marketName)} scheduled to start at ${botStartTime.toLocaleString()} (in ${delayMinutes}m ${delaySeconds % 60}s)`);
 
-    this.scheduledTimer = setTimeout(async () => {
+    // Clear any existing timer before setting a new one
+    if (this.nextScheduledTimer) {
+      clearTimeout(this.nextScheduledTimer);
+    }
+
+    this.nextScheduledTimer = setTimeout(async () => {
       await this.createBot(market);
     }, delayMs);
   }
@@ -466,22 +547,33 @@ class Orchestrator {
 
     // Create and start bot
     const botInstance = botManager.createBot(botConfig);
-    this.currentBotId = botInstance.config.id;
+    const botId = botInstance.config.id;
 
-    await botManager.startBot(this.currentBotId);
+    await botManager.startBot(botId);
 
-    this.scheduledStartTime = null;
+    // Track running bot
+    this.runningBotIds.add(botId);
+
+    // Set this as the active market (for UI display)
+    this.activeMarket = market;
+
+    // Clear scheduled market tracking (this bot is now running)
+    if (this.nextScheduledMarket?.marketId === market.marketId) {
+      this.nextScheduledMarket = null;
+      this.nextScheduledStartTime = null;
+    }
+
     this.setState('active');
     this.emitEvent({
       type: 'BOT_CREATED',
-      botId: this.currentBotId,
+      botId,
       market,
       timestamp: new Date(),
     });
 
     // Add to history
     this.botHistory.unshift({
-      botId: this.currentBotId,
+      botId,
       marketName: market.marketName,
       marketTimeWindow: this.extractTimeWindow(market.marketName),
       state: 'running',
@@ -495,10 +587,16 @@ class Orchestrator {
       this.botHistory = this.botHistory.slice(0, 50);
     }
 
-    console.log(`[Orchestrator] Bot created and started: ${this.currentBotId}`);
+    console.log(`[Orchestrator] Bot created and started: ${botId}`);
 
-    // Monitor for market close and cycle to next
-    this.monitorBotForCycle(this.currentBotId, market);
+    // Monitor for market close
+    this.monitorBotForCycle(botId, market);
+
+    // Immediately search for next market to schedule
+    // This enables overlapping bots (next bot starts while current is running)
+    if (this.config.enabled) {
+      setTimeout(() => this.findAndScheduleNextMarket(), 1000);
+    }
   }
 
   /**
@@ -513,14 +611,28 @@ class Orchestrator {
       return;
     }
 
+    // Periodically update position/PnL while bot is running
+    const updateInterval = setInterval(() => {
+      this.updateBotHistoryStats(botId);
+    }, 3000); // Update every 3 seconds
+
     // Listen for bot stop event (triggered by market close detection)
     const handler = (event: BotEvent) => {
       if (event.type === 'STOPPED') {
         bot.offEvent(handler);
+        clearInterval(updateInterval);
 
         console.log(`[Orchestrator] Bot ${botId} stopped, updating history...`);
 
-        // Update history
+        // Remove from running bots
+        this.runningBotIds.delete(botId);
+
+        // Clear active market if this was the active one
+        if (this.activeMarket?.marketId === market.marketId) {
+          this.activeMarket = null;
+        }
+
+        // Final update of history
         const historyItem = this.botHistory.find(b => b.botId === botId);
         if (historyItem) {
           const botInstance = botManager.getBot(botId);
@@ -531,19 +643,53 @@ class Orchestrator {
           }
         }
 
-        this.currentBotId = null;
         this.emitEvent({ type: 'CYCLE_COMPLETE', botId, timestamp: new Date() });
 
-        // If orchestrator is still enabled, find next market
+        // Update state based on remaining running bots and scheduled markets
         if (this.config.enabled) {
-          console.log('[Orchestrator] Cycling to next market...');
-          this.setState('searching');
-          this.findAndScheduleNextMarket();
+          if (this.runningBotIds.size > 0) {
+            this.setState('active');
+          } else if (this.nextScheduledMarket) {
+            this.setState('scheduled');
+          } else {
+            this.setState('searching');
+            // Trigger search for next market
+            this.findAndScheduleNextMarket();
+          }
         }
       }
     };
 
     bot.onEvent(handler);
+  }
+
+  /**
+   * Update bot history stats (position, PnL) for a running bot
+   */
+  private updateBotHistoryStats(botId: string): void {
+    const botManager = getBotManager();
+    const historyItem = this.botHistory.find(b => b.botId === botId);
+    if (!historyItem) return;
+
+    const botInstance = botManager.getBot(botId);
+    if (!botInstance) return;
+
+    const newPositionSize = botInstance.totalPositionSize ?? parseFloat(botInstance.position.size);
+    const newPnl = parseFloat(botInstance.metrics.totalPnl);
+
+    // Only emit update if values changed
+    if (historyItem.positionSize !== newPositionSize || historyItem.pnl !== newPnl) {
+      historyItem.positionSize = newPositionSize;
+      historyItem.pnl = newPnl;
+      historyItem.state = botInstance.state;
+
+      // Emit event so SSE clients get updated data
+      this.emitEvent({
+        type: 'STATE_CHANGED',
+        state: this.state,
+        timestamp: new Date(),
+      });
+    }
   }
 
   // ============================================================================

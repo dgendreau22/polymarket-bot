@@ -213,7 +213,6 @@ export class Bot {
           const midPrice = (bid + ask) / 2;
           this.currentPrice.yes = midPrice.toFixed(4);
           this.currentPrice.no = (1 - midPrice).toFixed(4);
-          console.log(`[Bot ${this.id}] Price update: YES=${this.currentPrice.yes} (bid=${bestBid}, ask=${bestAsk})`);
 
           // Update the current order book with latest best bid/ask for accurate marketable detection
           // This ensures new orders are checked against the most recent prices
@@ -316,7 +315,6 @@ export class Bot {
               asks: [{ price: bestAsk, size: '1000000' }, ...existingAsks],
             };
           }
-          console.log(`[Bot ${this.id}] NO price update: bid=${bestBid}, ask=${bestAsk}`);
 
           // Check for marketable orders on NO price changes
           const marketableFills = fillMarketableOrders(this.id, this.currentOrderBook, this.noOrderBook);
@@ -1174,12 +1172,30 @@ export class Bot {
    * Convert to BotInstance
    */
   toInstance(): BotInstance {
-    // Calculate total position size from all positions in DB (for arbitrage: YES + NO)
+    // Get all positions from DB (for arbitrage: YES + NO)
     const positionRows = getPositionsByBotId(this.id);
-    const totalPositionSize = positionRows.reduce(
-      (sum, row) => sum + parseFloat(row.size),
+
+    // Map to Position objects
+    const positions = positionRows.map(row => ({
+      marketId: row.market_id,
+      assetId: row.asset_id,
+      outcome: row.outcome as 'YES' | 'NO',
+      size: row.size,
+      avgEntryPrice: row.avg_entry_price,
+      realizedPnl: row.realized_pnl,
+    }));
+
+    // Calculate total position size
+    const totalPositionSize = positions.reduce(
+      (sum, pos) => sum + parseFloat(pos.size),
       0
     );
+
+    // Debug logging
+    if (positions.length > 0 || totalPositionSize > 0) {
+      console.log(`[Bot ${this.id}] toInstance positions:`, positions.length, 'rows, totalSize:', totalPositionSize);
+      positions.forEach(p => console.log(`  - ${p.outcome}: size=${p.size}, avgPrice=${p.avgEntryPrice}`));
+    }
 
     return {
       config: { ...this.config },
@@ -1191,6 +1207,7 @@ export class Bot {
       startedAt: this.startedAt,
       stoppedAt: this.stoppedAt,
       totalPositionSize,
+      positions,
     };
   }
 

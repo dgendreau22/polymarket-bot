@@ -457,15 +457,6 @@ export function fillMarketableOrders(
       fillPrice = prices.sortedBids[0].price;
     }
 
-    // Debug: Log why order isn't filling
-    if (!shouldFill && order.side === 'BUY' && orderPrice > 0.40) {
-      console.log(
-        `[OrderMatcher] ${order.outcome} BUY @ ${orderPrice} NOT filling: ` +
-        `bestAsk=${prices.bestAsk === Infinity ? 'MISSING' : prices.bestAsk.toFixed(4)}, ` +
-        `condition: ${orderPrice} >= ${prices.bestAsk} = ${orderPrice >= prices.bestAsk}`
-      );
-    }
-
     if (shouldFill) {
       console.log(
         `[OrderMatcher] Filling marketable ${order.outcome} ${order.side} @ ${orderPrice} against ${order.side === 'BUY' ? 'ask' : 'bid'} @ ${fillPrice}`

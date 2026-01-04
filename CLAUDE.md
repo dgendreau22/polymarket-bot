@@ -215,6 +215,8 @@ The arbitrage strategy (`registry.ts` ArbitrageExecutor) accumulates both YES an
 
 SQLite database stored at `data/polymarket-bot.db` (or `DATABASE_PATH` env var).
 
+When accessing bots and trading data in the database, use the ./sqlite3.exe command in /c/Users/David/Desktop/Dev/Claude_code/polymarket-bot/
+
 **Tables:**
 - `bots` - Bot configurations and state (includes `no_asset_id` for arbitrage)
 - `trades` - Trade history with PnL tracking
@@ -244,3 +246,7 @@ DATABASE_PATH               # Optional: SQLite database path
 - shadcn/ui with Lucide icons
 
 **Import alias:** `@/*` maps to `./src/*`
+
+### Tooling
+
+Use the command python and not python3 when doing analysis.

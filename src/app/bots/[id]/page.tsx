@@ -353,7 +353,6 @@ export default function BotDetailPage() {
           const inferred = inferTickSize(samplePrice);
           setTickSize((current) => {
             if (current === "0.0001" || parseFloat(inferred) > parseFloat(current)) {
-              console.log("[BotPage] Inferred tick size:", inferred);
               return inferred;
             }
             return current;

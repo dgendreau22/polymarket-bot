@@ -298,10 +298,6 @@ export class PolymarketWebSocket {
     try {
       const message = JSON.parse(data);
 
-      // Log all event types for debugging
-      if (message.event_type) {
-        console.log(`[WS] Event: ${message.event_type}`, message.asset_id ? `asset: ${message.asset_id.slice(0, 8)}...` : "");
-      }
 
       // Handle array of order books (initial snapshot)
       if (Array.isArray(message)) {

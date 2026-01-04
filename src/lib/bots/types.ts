@@ -40,6 +40,8 @@ export interface BotInstance {
   stoppedAt?: Date;
   /** Total position size summed from all positions (for arbitrage: YES + NO) */
   totalPositionSize?: number;
+  /** All positions for this bot (YES and NO for arbitrage) */
+  positions?: Position[];
 }
 
 /** Database row for bot */

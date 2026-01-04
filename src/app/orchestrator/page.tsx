@@ -6,34 +6,36 @@ import { Button } from "@/components/ui/button";
 import {
   Play,
   Square,
-  Clock,
   Bot,
-  TrendingUp,
-  TrendingDown,
   AlertCircle,
   Calendar,
-  Timer,
   Zap,
   RefreshCw,
   ArrowLeft,
+  Trash2,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { BotList } from "@/components/bots/BotList";
+import type { BotInstance } from "@/lib/bots/types";
 import type {
   OrchestratorState,
   OrchestratorStatus,
-  OrchestratorBotInfo,
-  ScheduledMarket,
   OrchestratorEvent,
 } from "@/lib/bots/Orchestrator";
+
+// Pattern to match Bitcoin 15-minute markets
+const BTC_15M_PATTERN = /Bitcoin Up or Down/i;
 
 export default function OrchestratorPage() {
   // State
   const [status, setStatus] = useState<OrchestratorStatus | null>(null);
-  const [bots, setBots] = useState<OrchestratorBotInfo[]>([]);
+  const [bots, setBots] = useState<BotInstance[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [countdown, setCountdown] = useState<string>("");
+  const [nextCountdown, setNextCountdown] = useState<string>("");
+  const [deleteAllLoading, setDeleteAllLoading] = useState(false);
 
   // Configuration form state
   const [strategy, setStrategy] = useState("arbitrage");
@@ -61,13 +63,17 @@ export default function OrchestratorPage() {
     }
   }, []);
 
-  // Fetch bot history
+  // Fetch bots and filter to Bitcoin 15m markets
   const fetchBots = useCallback(async () => {
     try {
-      const res = await fetch("/api/orchestrator/bots");
+      const res = await fetch("/api/bots");
       const data = await res.json();
       if (data.success) {
-        setBots(data.data);
+        // Filter to only Bitcoin 15m market bots
+        const btc15mBots = data.data.filter((bot: BotInstance) =>
+          BTC_15M_PATTERN.test(bot.config.marketName || "")
+        );
+        setBots(btc15mBots);
       }
     } catch (err) {
       console.error("Failed to fetch bots:", err);
@@ -120,6 +126,46 @@ export default function OrchestratorPage() {
     }
   };
 
+  // Delete all stopped bots
+  const handleDeleteAll = async () => {
+    const stoppedBots = bots.filter((b) => b.state === "stopped");
+    if (stoppedBots.length === 0) {
+      alert("No stopped bots to delete");
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to delete all ${stoppedBots.length} stopped bots? This will also delete all associated trades.`)) {
+      return;
+    }
+
+    setDeleteAllLoading(true);
+    setError(null);
+
+    let deleted = 0;
+    let failed = 0;
+
+    for (const bot of stoppedBots) {
+      try {
+        const res = await fetch(`/api/bots/${bot.config.id}`, { method: "DELETE" });
+        const data = await res.json();
+        if (data.success) {
+          deleted++;
+        } else {
+          failed++;
+        }
+      } catch {
+        failed++;
+      }
+    }
+
+    setDeleteAllLoading(false);
+    fetchBots();
+
+    if (failed > 0) {
+      setError(`Deleted ${deleted} bots, ${failed} failed`);
+    }
+  };
+
   // SSE connection for real-time updates
   useEffect(() => {
     const eventSource = new EventSource("/api/orchestrator/events");
@@ -133,13 +179,9 @@ export default function OrchestratorPage() {
       }
     });
 
-    eventSource.addEventListener("bots", (e) => {
-      try {
-        const data = JSON.parse(e.data) as OrchestratorBotInfo[];
-        setBots(data);
-      } catch (err) {
-        console.error("Failed to parse bots:", err);
-      }
+    eventSource.addEventListener("bots", () => {
+      // Refetch bots when orchestrator notifies of changes
+      fetchBots();
     });
 
     eventSource.addEventListener("event", (e) => {
@@ -156,7 +198,7 @@ export default function OrchestratorPage() {
     };
 
     return () => eventSource.close();
-  }, []);
+  }, [fetchBots]);
 
   // Initial data fetch
   useEffect(() => {
@@ -164,7 +206,7 @@ export default function OrchestratorPage() {
     Promise.all([fetchStatus(), fetchBots()]).finally(() => setLoading(false));
   }, [fetchStatus, fetchBots]);
 
-  // Countdown timer
+  // Countdown timer for scheduled state
   useEffect(() => {
     if (!status?.scheduledStartTime) {
       setCountdown("");
@@ -190,6 +232,42 @@ export default function OrchestratorPage() {
     const interval = setInterval(updateCountdown, 1000);
     return () => clearInterval(interval);
   }, [status?.scheduledStartTime]);
+
+  // Countdown timer for next market (shown even when active)
+  useEffect(() => {
+    if (!status?.nextMarketStartTime) {
+      setNextCountdown("");
+      return;
+    }
+
+    const updateNextCountdown = () => {
+      const target = new Date(status.nextMarketStartTime!).getTime();
+      const now = Date.now();
+      const diff = target - now;
+
+      if (diff <= 0) {
+        setNextCountdown("Starting...");
+        return;
+      }
+
+      const mins = Math.floor(diff / 60000);
+      const secs = Math.floor((diff % 60000) / 1000);
+      setNextCountdown(`${mins}:${secs.toString().padStart(2, "0")}`);
+    };
+
+    updateNextCountdown();
+    const interval = setInterval(updateNextCountdown, 1000);
+    return () => clearInterval(interval);
+  }, [status?.nextMarketStartTime]);
+
+  // Poll for bot updates while any bot is running
+  useEffect(() => {
+    const hasRunningBots = bots.some((b) => b.state === "running");
+    if (!hasRunningBots) return;
+
+    const interval = setInterval(fetchBots, 5000);
+    return () => clearInterval(interval);
+  }, [bots, fetchBots]);
 
   const isRunning = status?.config.enabled ?? false;
   const state = status?.state ?? "idle";
@@ -399,17 +477,57 @@ export default function OrchestratorPage() {
         {/* Bot List */}
         <div className="bg-card border rounded-lg">
           <div className="p-6 border-b">
-            <h2 className="font-semibold flex items-center gap-2">
-              <Bot className="w-5 h-5 text-purple-500" />
-              Managed Bots
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              {bots.filter((b) => b.state === "running").length} running,{" "}
-              {bots.filter((b) => b.state === "stopped").length} completed
-            </p>
+            <div className="flex items-start justify-between">
+              <div className="flex items-start gap-4">
+                <div>
+                  <h2 className="font-semibold flex items-center gap-2">
+                    <Bot className="w-5 h-5 text-purple-500" />
+                    Bitcoin 15m Bots
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    {bots.filter((b) => b.state === "running").length} running,{" "}
+                    {bots.filter((b) => b.state === "paused").length} paused,{" "}
+                    {bots.filter((b) => b.state === "stopped").length} stopped
+                  </p>
+                </div>
+                {/* Delete All button */}
+                {bots.filter((b) => b.state === "stopped").length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleDeleteAll}
+                    disabled={deleteAllLoading}
+                    className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                  >
+                    {deleteAllLoading ? (
+                      <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-4 h-4 mr-2" />
+                    )}
+                    Delete All
+                  </Button>
+                )}
+              </div>
+              {/* Upcoming scheduled market - always show when available */}
+              {status?.nextMarket && nextCountdown && (
+                <div className="text-right">
+                  <p className="text-xs text-muted-foreground">Next market in</p>
+                  <p className="text-2xl font-mono font-bold text-primary">
+                    {nextCountdown}
+                  </p>
+                  <p className="text-xs text-muted-foreground truncate max-w-[200px]">
+                    {status.nextMarket.marketName.replace("Bitcoin Up or Down - ", "")}
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
           <div className="p-6">
-            <OrchestratorBotList bots={bots} />
+            <BotList
+              bots={bots}
+              onStateChange={fetchBots}
+              emptyMessage="No Bitcoin 15m bots yet. Start the orchestrator to create bots automatically."
+            />
           </div>
         </div>
       </div>
@@ -441,83 +559,3 @@ function OrchestratorStatusBadge({ state }: { state: OrchestratorState }) {
   );
 }
 
-// Bot List Component
-function OrchestratorBotList({ bots }: { bots: OrchestratorBotInfo[] }) {
-  if (bots.length === 0) {
-    return (
-      <div className="text-center text-muted-foreground py-8">
-        <Bot className="w-12 h-12 mx-auto mb-3 opacity-50" />
-        <p>No bots yet</p>
-        <p className="text-sm">
-          Start the orchestrator to create bots automatically
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b text-left text-muted-foreground">
-            <th className="pb-3 pr-4">Time Window</th>
-            <th className="pb-3 pr-4">State</th>
-            <th className="pb-3 pr-4 text-right">Position</th>
-            <th className="pb-3 text-right">PnL</th>
-            <th className="pb-3 pl-4">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {bots.map((bot) => (
-            <tr key={bot.botId} className="border-b last:border-0">
-              <td className="py-3 pr-4">
-                <span className="font-mono">{bot.marketTimeWindow}</span>
-                <p className="text-xs text-muted-foreground truncate max-w-[200px]">
-                  {bot.marketName}
-                </p>
-              </td>
-              <td className="py-3 pr-4">
-                <span
-                  className={`px-2 py-1 rounded text-xs ${
-                    bot.state === "running"
-                      ? "bg-green-500/20 text-green-500"
-                      : bot.state === "paused"
-                      ? "bg-yellow-500/20 text-yellow-500"
-                      : "bg-muted text-muted-foreground"
-                  }`}
-                >
-                  {bot.state.toUpperCase()}
-                </span>
-              </td>
-              <td className="py-3 pr-4 text-right font-mono">
-                {bot.positionSize.toFixed(2)}
-              </td>
-              <td
-                className={`py-3 text-right font-mono ${
-                  bot.pnl >= 0 ? "text-green-500" : "text-red-500"
-                }`}
-              >
-                <span className="flex items-center justify-end gap-1">
-                  {bot.pnl >= 0 ? (
-                    <TrendingUp className="w-3 h-3" />
-                  ) : (
-                    <TrendingDown className="w-3 h-3" />
-                  )}
-                  ${Math.abs(bot.pnl).toFixed(2)}
-                </span>
-              </td>
-              <td className="py-3 pl-4">
-                <Link
-                  href={`/bots/${bot.botId}`}
-                  className="text-primary hover:underline text-xs"
-                >
-                  View
-                </Link>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
