@@ -6,8 +6,7 @@
 
 import { NextResponse } from "next/server";
 import { hasCredentials, getConfig, getOrInitClobClient } from "@/lib/polymarket";
-import { getMarketMaker } from "@/lib/strategies/market-maker";
-import { getArbitrageDetector } from "@/lib/strategies/arbitrage";
+import { getBotManager } from "@/lib/bots/BotManager";
 import { AssetType } from "@polymarket/clob-client";
 
 async function getPortfolioData() {
@@ -52,22 +51,26 @@ async function getPortfolioData() {
 
 export async function GET() {
   try {
-    const marketMaker = getMarketMaker();
-    const arbitrage = getArbitrageDetector();
+    const botManager = getBotManager();
     const portfolio = await getPortfolioData();
+    const bots = botManager.getAllBots();
+
+    // Count bots by strategy
+    const botsByStrategy = bots.reduce((acc, bot) => {
+      const strategy = bot.config.strategySlug;
+      acc[strategy] = (acc[strategy] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
 
     return NextResponse.json({
       success: true,
       data: {
         configured: hasCredentials(),
         config: getConfig(),
-        marketMaker: {
-          // Get active market making states
-          activeMarkets: 0, // Would need to expose this from MarketMaker
-        },
-        arbitrage: {
-          monitoredMarkets: arbitrage.getMarketStates().length,
-          opportunities: arbitrage.scanForOpportunities(),
+        bots: {
+          total: bots.length,
+          running: bots.filter(b => b.state === 'running').length,
+          byStrategy: botsByStrategy,
         },
         portfolio,
       },

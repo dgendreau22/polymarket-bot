@@ -9,6 +9,7 @@
 
 import { getBotManager } from './BotManager';
 import { getGammaClient } from '../polymarket/client';
+import { getETOffsetMinutes, formatTime12Hour } from '../utils/time';
 import type { BotConfig, BotMode, BotEvent } from './types';
 
 // ============================================================================
@@ -107,8 +108,6 @@ class Orchestrator {
   private lastError: string | null = null;
 
   // Market discovery constants
-  private readonly SEARCH_QUERY = 'Bitcoin Up or Down';
-  private readonly MARKET_PATTERN = /Bitcoin Up or Down - (\w+ \d{1,2}), (\d{1,2}):(\d{2})(AM|PM)-(\d{1,2}):(\d{2})(AM|PM) ET/i;
   private readonly SEARCH_INTERVAL_MS = 30000; // Check for new markets every 30 seconds
   private readonly MIN_SEARCH_INTERVAL_MS = 5000; // Rate limit: 5 seconds between searches
 
@@ -279,172 +278,136 @@ class Orchestrator {
 
   /**
    * Discover next upcoming Bitcoin 15-min market
+   * Uses direct event slug lookup based on calculated timestamps
    */
   private async discoverNextMarket(): Promise<ScheduledMarket | null> {
     const gamma = getGammaClient();
-
-    // Search for Bitcoin up/down markets
-    const results = await gamma.search({
-      q: this.SEARCH_QUERY,
-      limit_per_type: 50,
-      events_status: 'active',
-    });
-
     const now = new Date();
     const nowMs = now.getTime();
-    const leadTimeMs = this.config.leadTimeMinutes * 60 * 1000;
     const MIN_REMAINING_MS = 2 * 60 * 1000; // Need at least 2 minutes remaining to join
 
-    // Collect all valid candidate markets
-    const candidates: Array<{
-      market: ScheduledMarket;
-      startTime: number;
-    }> = [];
+    console.log(`[Orchestrator] Searching for markets at ${now.toLocaleString()} (UTC: ${now.toISOString()})`);
 
-    // Find events with markets matching our pattern
-    const events = (results as { events?: Array<{ markets?: Array<{ question?: string; id?: string; conditionId?: string; clobTokenIds?: string | string[] }> }> }).events || [];
+    // Calculate the next few 15-minute slot timestamps
+    // Markets are at :00, :15, :30, :45 of each hour
+    const slotTimestamps = this.getUpcoming15MinSlots(now, 8); // Check next 8 slots (2 hours)
 
-    for (const event of events) {
-      const markets = event.markets || [];
+    for (const slotInfo of slotTimestamps) {
+      const { timestamp, startTimeET, endTimeET } = slotInfo;
+      const eventSlug = `btc-updown-15m-${timestamp}`;
 
-      for (const market of markets) {
-        const marketId = market.id || market.conditionId || '';
+      // Skip if already scheduled
+      if (this.scheduledMarketIds.has(eventSlug)) {
+        console.log(`[Orchestrator] Skipping slot ${startTimeET}: already scheduled`);
+        continue;
+      }
 
-        // Skip already scheduled markets
-        if (this.scheduledMarketIds.has(marketId)) continue;
+      // Check if market has enough time remaining
+      const endTimeMs = (timestamp + 15 * 60) * 1000; // 15 minutes after start
+      const timeUntilEnd = endTimeMs - nowMs;
+      if (timeUntilEnd < MIN_REMAINING_MS) {
+        console.log(`[Orchestrator] Skipping slot ${startTimeET}: ends in ${Math.round(timeUntilEnd/1000)}s`);
+        continue;
+      }
 
-        const marketName = market.question || '';
-        const parsed = this.parseMarketName(marketName);
-        if (!parsed) continue;
+      try {
+        console.log(`[Orchestrator] Trying event slug: ${eventSlug} (${startTimeET}-${endTimeET} ET)`);
+        const event = await gamma.getEventBySlug(eventSlug);
 
-        // Skip if market has ended or is ending soon
-        const timeUntilEnd = parsed.endTime.getTime() - nowMs;
-        if (timeUntilEnd < MIN_REMAINING_MS) continue;
+        if (event && event.markets && event.markets.length > 0) {
+          const market = event.markets[0];
+          const marketId = String(market.id || market.conditionId || '');
+          const marketName = market.question || `Bitcoin Up or Down - ${startTimeET}-${endTimeET} ET`;
+          const tokenIds = this.parseTokenIds(market.clobTokenIds);
 
-        // Parse token IDs for asset IDs
-        const tokenIds = this.parseTokenIds(market.clobTokenIds);
+          // Parse times from the slot
+          const startTime = new Date(timestamp * 1000);
+          const endTime = new Date((timestamp + 15 * 60) * 1000);
 
-        candidates.push({
-          market: {
+          console.log(`[Orchestrator] Found market: ${marketName}`);
+          console.log(`  -> Market ID: ${marketId}`);
+          console.log(`  -> Start: ${startTime.toLocaleString()} | End: ${endTime.toLocaleString()}`);
+
+          // Track by event slug to avoid duplicate lookups
+          this.scheduledMarketIds.add(eventSlug);
+
+          return {
             marketId,
             marketName,
-            startTime: parsed.startTime,
-            endTime: parsed.endTime,
+            startTime,
+            endTime,
             assetId: tokenIds[0],
             noAssetId: tokenIds[1],
-          },
-          startTime: parsed.startTime.getTime(),
-        });
+          };
+        } else {
+          console.log(`[Orchestrator] No market found for slug: ${eventSlug}`);
+        }
+      } catch (error) {
+        // Event doesn't exist yet, try next slot
+        console.log(`[Orchestrator] Event not found: ${eventSlug}`);
       }
     }
 
-    // Sort by start time ascending (earliest market first)
-    candidates.sort((a, b) => a.startTime - b.startTime);
+    console.log('[Orchestrator] No upcoming 15-min markets found in next 2 hours');
+    return null;
+  }
 
-    // Log candidates for debugging
-    if (candidates.length > 0) {
-      console.log(`[Orchestrator] Found ${candidates.length} candidate markets:`);
-      candidates.slice(0, 5).forEach((c, i) => {
-        console.log(`  ${i + 1}. ${c.market.marketName} (starts: ${c.market.startTime.toLocaleString()})`);
+  /**
+   * Get upcoming 15-minute slot timestamps
+   * Returns Unix timestamps (in seconds) for upcoming market slots
+   */
+  private getUpcoming15MinSlots(now: Date, count: number): Array<{
+    timestamp: number;
+    startTimeET: string;
+    endTimeET: string;
+  }> {
+    const slots: Array<{ timestamp: number; startTimeET: string; endTimeET: string }> = [];
+
+    // Get current time in ET
+    // ET offset: EST (winter) = UTC-5, EDT (summer) = UTC-4
+    const etOffsetMs = getETOffsetMinutes(now) * 60 * 1000;
+
+    // Current UTC time
+    const nowUtcMs = now.getTime();
+
+    // Current ET time (as if it were UTC, for calculation purposes)
+    const nowEtMs = nowUtcMs - etOffsetMs;
+    const nowEt = new Date(nowEtMs);
+
+    // Round down to the current 15-minute slot in ET
+    const etMinutes = nowEt.getUTCMinutes();
+    const slotMinutes = Math.floor(etMinutes / 15) * 15;
+    const currentSlotEt = new Date(nowEt);
+    currentSlotEt.setUTCMinutes(slotMinutes, 0, 0);
+
+    // Generate upcoming slots
+    for (let i = 0; i < count; i++) {
+      const slotEt = new Date(currentSlotEt.getTime() + i * 15 * 60 * 1000);
+
+      // Convert back to UTC for the timestamp
+      const slotUtcMs = slotEt.getTime() + etOffsetMs;
+      const timestamp = Math.floor(slotUtcMs / 1000);
+
+      // Format ET times for display
+      const startHour = slotEt.getUTCHours();
+      const startMin = slotEt.getUTCMinutes();
+      const endSlotEt = new Date(slotEt.getTime() + 15 * 60 * 1000);
+      const endHour = endSlotEt.getUTCHours();
+      const endMin = endSlotEt.getUTCMinutes();
+
+      slots.push({
+        timestamp,
+        startTimeET: formatTime12Hour(startHour, startMin),
+        endTimeET: formatTime12Hour(endHour, endMin),
       });
     }
 
-    return candidates.length > 0 ? candidates[0].market : null;
+    return slots;
   }
 
   // ============================================================================
-  // Market Name Parsing
+  // Utility Methods
   // ============================================================================
-
-  /**
-   * Parse market name to extract date and time window
-   *
-   * Input: "Bitcoin Up or Down - January 2, 2:30PM-2:45PM ET"
-   * Output: { startTime: Date, endTime: Date }
-   */
-  private parseMarketName(name: string): { startTime: Date; endTime: Date } | null {
-    const match = name.match(this.MARKET_PATTERN);
-    if (!match) return null;
-
-    const [, dateStr, startHour, startMin, startPeriod, endHour, endMin, endPeriod] = match;
-
-    // Parse the date (assume current year, handle year rollover)
-    const currentYear = new Date().getFullYear();
-    let dateWithYear = `${dateStr}, ${currentYear}`;
-    let baseDate = new Date(dateWithYear);
-
-    // If the date is in the past by more than 6 months, it's probably next year
-    const now = new Date();
-    if (baseDate.getTime() < now.getTime() - 180 * 24 * 60 * 60 * 1000) {
-      dateWithYear = `${dateStr}, ${currentYear + 1}`;
-      baseDate = new Date(dateWithYear);
-    }
-
-    if (isNaN(baseDate.getTime())) return null;
-
-    // Convert 12-hour to 24-hour format
-    const start24Hour = this.to24Hour(parseInt(startHour), startPeriod as 'AM' | 'PM');
-    const end24Hour = this.to24Hour(parseInt(endHour), endPeriod as 'AM' | 'PM');
-
-    // Create start and end times in ET (Eastern Time)
-    // We'll create the times and then adjust for ET offset
-    const startTime = new Date(baseDate);
-    startTime.setHours(start24Hour, parseInt(startMin), 0, 0);
-
-    const endTime = new Date(baseDate);
-    endTime.setHours(end24Hour, parseInt(endMin), 0, 0);
-
-    // Handle day rollover (e.g., 11:45PM-12:00AM)
-    if (endTime <= startTime) {
-      endTime.setDate(endTime.getDate() + 1);
-    }
-
-    // Convert from ET to local time
-    // When we parsed "3:45PM", JavaScript created a Date for 3:45 PM LOCAL time.
-    // But we want it to represent 3:45 PM ET (Eastern Time).
-    //
-    // Example: User is in Central (UTC-6), market time is 3:45 PM ET (UTC-5)
-    // - Parsed Date = 3:45 PM Central = 21:45 UTC (wrong - too late by 1 hour)
-    // - Correct Date = 3:45 PM ET = 20:45 UTC = 2:45 PM Central
-    // - Adjustment: subtract (localOffset - etOffset) = subtract (360 - 300) = subtract 60 min
-    //
-    // getTimezoneOffset() returns minutes BEHIND UTC (positive for west of UTC)
-    // Central (UTC-6) = +360, ET (UTC-5) = +300
-    const localOffsetMinutes = startTime.getTimezoneOffset();
-    const etOffsetMinutes = this.getETOffsetMinutes(startTime);
-    const adjustmentMs = (localOffsetMinutes - etOffsetMinutes) * 60 * 1000;
-
-    startTime.setTime(startTime.getTime() - adjustmentMs);
-    endTime.setTime(endTime.getTime() - adjustmentMs);
-
-    return { startTime, endTime };
-  }
-
-  /**
-   * Get ET offset in minutes (in same format as getTimezoneOffset - positive for west of UTC)
-   * EST (Nov-Mar) = UTC-5 = +300 minutes
-   * EDT (Mar-Nov) = UTC-4 = +240 minutes
-   */
-  private getETOffsetMinutes(date: Date): number {
-    const month = date.getMonth();
-    // Rough DST handling: EDT (UTC-4) from March to November, EST (UTC-5) otherwise
-    // More accurate would be second Sunday in March to first Sunday in November
-    if (month >= 2 && month <= 10) {
-      return 240; // EDT: UTC-4 = +240 minutes behind UTC
-    }
-    return 300; // EST: UTC-5 = +300 minutes behind UTC
-  }
-
-  /**
-   * Convert 12-hour to 24-hour format
-   */
-  private to24Hour(hour: number, period: 'AM' | 'PM'): number {
-    if (period === 'AM') {
-      return hour === 12 ? 0 : hour;
-    } else {
-      return hour === 12 ? 12 : hour + 12;
-    }
-  }
 
   /**
    * Extract time window from market name for display

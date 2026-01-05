@@ -33,7 +33,7 @@ import {
   getBotTradeStats,
   rowToTrade,
 } from '../persistence/TradeRepository';
-import { cleanupBotState } from '../strategies/registry';
+import { cleanupBotState, getExecutor } from '../strategies/registry';
 import {
   getOpenOrdersByBotId,
   cancelAllBotOrders,
@@ -157,14 +157,19 @@ class BotManager {
     // Create bot instance
     const bot = new Bot(fullConfig);
 
-    // Initialize position(s)
-    if (config.strategySlug === 'arbitrage' && config.assetId && config.noAssetId) {
-      // For arbitrage bots, create TWO positions (YES and NO)
-      getOrCreatePosition(record.id, record.market_id, config.assetId, 'YES');
-      getOrCreatePosition(record.id, record.market_id, config.noAssetId, 'NO');
-      console.log(`[BotManager] Created YES and NO positions for arbitrage bot: ${record.id}`);
+    // Initialize position(s) based on executor metadata
+    const executor = getExecutor(config.strategySlug);
+    if (executor?.metadata.positionHandler === 'multi') {
+      // Multi-asset strategies: create position for each required asset
+      for (const asset of executor.metadata.requiredAssets) {
+        const assetId = config[asset.configKey as keyof typeof config] as string | undefined;
+        if (assetId) {
+          getOrCreatePosition(record.id, record.market_id, assetId, asset.label as 'YES' | 'NO');
+        }
+      }
+      console.log(`[BotManager] Created multi-asset positions for bot: ${record.id}`);
     } else {
-      // For regular bots, create single position
+      // Single-asset strategies: create single position
       getOrCreatePosition(record.id, record.market_id, record.asset_id || '', 'YES');
     }
 

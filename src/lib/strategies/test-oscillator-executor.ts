@@ -5,9 +5,17 @@
  * Used for testing bot infrastructure.
  */
 
-import type { IStrategyExecutor, StrategyContext, StrategySignal } from '../bots/types';
+import type { IStrategyExecutor, StrategyContext, StrategySignal, ExecutorMetadata } from '../bots/types';
 
 export class TestOscillatorExecutor implements IStrategyExecutor {
+  /** Executor metadata - declares single-asset requirements */
+  readonly metadata: ExecutorMetadata = {
+    requiredAssets: [
+      { configKey: 'assetId', label: 'YES', subscriptions: ['orderBook', 'price'] },
+    ],
+    positionHandler: 'single',
+  };
+
   async execute(context: StrategyContext): Promise<StrategySignal | null> {
     const { position, currentPrice, bot } = context;
     const config = (bot.config.strategyConfig || {}) as Record<string, unknown>;
