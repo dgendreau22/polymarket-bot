@@ -323,10 +323,51 @@ export interface StrategyStats {
 // Executor Interface
 // ============================================================================
 
+/** Asset subscription types for market data */
+export type AssetSubscription = 'orderBook' | 'price' | 'trades' | 'tickSize';
+
+/** Asset requirement for strategy subscriptions */
+export interface AssetRequirement {
+  /** Key in BotConfig to get asset ID */
+  configKey: 'assetId' | 'noAssetId';
+  /** Label for this asset (e.g., 'YES', 'NO') */
+  label: string;
+  /** What data to subscribe to for this asset */
+  subscriptions: AssetSubscription[];
+}
+
+/** Stale order cancellation rules */
+export interface StaleOrderRules {
+  /** Max age in seconds before order is considered stale */
+  maxOrderAge?: number;
+  /** Max distance from mid price (0.05 = 5%) */
+  maxPriceDistance?: number;
+  /** Check each outcome separately (for multi-asset strategies) */
+  perOutcome?: boolean;
+}
+
+/** Strategy executor metadata - declares strategy requirements */
+export interface ExecutorMetadata {
+  /** What assets this strategy needs and their subscriptions */
+  requiredAssets: AssetRequirement[];
+  /** How to handle position updates: 'single' for in-memory, 'multi' for DB-only */
+  positionHandler: 'single' | 'multi';
+  /** Rules for cancelling stale orders */
+  staleOrderRules?: StaleOrderRules;
+  /** Threshold for counting pending orders as fillable (default: 1.0 = all) */
+  fillabilityThreshold?: number;
+}
+
 /** Strategy executor interface */
 export interface IStrategyExecutor {
+  /** Metadata declaring strategy requirements */
+  readonly metadata: ExecutorMetadata;
+  /** Execute strategy and return signal */
   execute(context: StrategyContext): Promise<StrategySignal | null>;
+  /** Optional config validation */
   validate?(config: Record<string, unknown>): boolean;
+  /** Optional cleanup when bot is deleted */
+  cleanup?(botId: string): void;
 }
 
 /** Trade execution result */
@@ -335,6 +376,16 @@ export interface TradeExecutionResult {
   trade?: Trade;
   error?: string;
   orderId?: string;
+}
+
+/** Pending order statistics for strategy context */
+export interface PendingOrderStats {
+  /** Total pending BUY quantity across all assets */
+  totalBuy: number;
+  /** Total pending SELL quantity across all assets */
+  totalSell: number;
+  /** Per-asset pending order stats (key: outcome label like 'YES', 'NO') */
+  perAsset: Map<string, { qty: number; value: number }>;
 }
 
 // ============================================================================

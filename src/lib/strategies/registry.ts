@@ -4,7 +4,7 @@
  * Maps strategy slugs to their executor implementations.
  */
 
-import type { IStrategyExecutor } from '../bots/types';
+import type { IStrategyExecutor, ExecutorMetadata } from '../bots/types';
 
 // Import executor implementations
 import { TestOscillatorExecutor } from './test-oscillator-executor';
@@ -56,13 +56,23 @@ export function unregisterStrategy(slug: string): boolean {
 }
 
 /**
+ * Get executor metadata by strategy slug
+ */
+export function getExecutorMetadata(slug: string): ExecutorMetadata | undefined {
+  const executor = executors.get(slug);
+  return executor?.metadata;
+}
+
+/**
  * Clean up any per-bot state stored by strategy executors.
  * Call this when a bot is deleted to prevent memory leaks.
  */
 export function cleanupBotState(botId: string): void {
-  const arbExecutor = executors.get('arbitrage') as ArbitrageExecutor | undefined;
-  if (arbExecutor?.cleanupBot) {
-    arbExecutor.cleanupBot(botId);
+  // Call cleanup on all executors that have state
+  for (const executor of executors.values()) {
+    if (executor.cleanup) {
+      executor.cleanup(botId);
+    }
   }
 }
 

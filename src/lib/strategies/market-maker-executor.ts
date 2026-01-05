@@ -5,9 +5,21 @@
  * Earns the spread when both sides fill.
  */
 
-import type { IStrategyExecutor, StrategyContext, StrategySignal } from '../bots/types';
+import type { IStrategyExecutor, StrategyContext, StrategySignal, ExecutorMetadata } from '../bots/types';
 
 export class MarketMakerExecutor implements IStrategyExecutor {
+  /** Executor metadata - declares single-asset requirements */
+  readonly metadata: ExecutorMetadata = {
+    requiredAssets: [
+      { configKey: 'assetId', label: 'YES', subscriptions: ['orderBook', 'price', 'trades', 'tickSize'] },
+    ],
+    positionHandler: 'single',
+    staleOrderRules: {
+      maxOrderAge: 60,
+      maxPriceDistance: 0.05,
+    },
+  };
+
   // Round price to tick size
   private roundToTick(price: number, tickSize: number): string {
     const rounded = Math.round(price / tickSize) * tickSize;

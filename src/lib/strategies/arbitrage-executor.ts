@@ -14,10 +14,24 @@
  * 7. Close-out mode: In last 10% of time, force hedging on lagging leg
  */
 
-import type { IStrategyExecutor, StrategyContext, StrategySignal } from '../bots/types';
+import type { IStrategyExecutor, StrategyContext, StrategySignal, ExecutorMetadata } from '../bots/types';
 import type { OrderBook } from '../polymarket/types';
 
 export class ArbitrageExecutor implements IStrategyExecutor {
+  /** Executor metadata - declares dual-asset requirements */
+  readonly metadata: ExecutorMetadata = {
+    requiredAssets: [
+      { configKey: 'assetId', label: 'YES', subscriptions: ['orderBook', 'price', 'trades'] },
+      { configKey: 'noAssetId', label: 'NO', subscriptions: ['orderBook', 'price'] },
+    ],
+    positionHandler: 'multi',
+    staleOrderRules: {
+      maxPriceDistance: 0.20,
+      perOutcome: true,
+    },
+    fillabilityThreshold: 0.80,
+  };
+
   // Order throttling: track last order time per leg PER BOT to prevent burst trading
   // Using a Map keyed by botId so multiple bots don't share cooldown state
   private botCooldowns: Map<string, { lastYesOrderTime: number; lastNoOrderTime: number }> = new Map();
@@ -30,7 +44,7 @@ export class ArbitrageExecutor implements IStrategyExecutor {
   /**
    * Clean up state for a deleted bot to prevent memory leaks
    */
-  cleanupBot(botId: string): void {
+  cleanup(botId: string): void {
     this.botCooldowns.delete(botId);
     this.lastBoughtLeg.delete(botId);
   }
@@ -91,10 +105,6 @@ export class ArbitrageExecutor implements IStrategyExecutor {
     if (otherLegAvg > 0) {
       const maxPrice = this.PROFIT_THRESHOLD - otherLegAvg - 0.01; // 1c buffer
       if (price > maxPrice) {
-        console.log(
-          `[Arb] BLOCKED: ${side} @ ${price.toFixed(3)} exceeds dynamic ceiling ` +
-          `${maxPrice.toFixed(3)} (other leg avg=${otherLegAvg.toFixed(3)})`
-        );
         return false;
       }
       return true;
@@ -102,10 +112,6 @@ export class ArbitrageExecutor implements IStrategyExecutor {
 
     // No other leg yet - use absolute ceiling
     if (price > this.MAX_SINGLE_LEG_PRICE) {
-      console.log(
-        `[Arb] BLOCKED: ${side} @ ${price.toFixed(3)} exceeds absolute ceiling ` +
-        `${this.MAX_SINGLE_LEG_PRICE} (no other leg position yet)`
-      );
       return false;
     }
     return true;
@@ -260,16 +266,6 @@ export class ArbitrageExecutor implements IStrategyExecutor {
     const combinedAvgCost = yesAvg + noAvg;
     const potentialProfit = 1.0 - combinedAskCost;
 
-    console.log(
-      `[Arb] YES: bid=${yesBestBid.toFixed(3)} ask=${yesBestAsk.toFixed(3)} | ` +
-      `NO: bid=${noBestBid.toFixed(3)} ask=${noBestAsk.toFixed(3)} | ` +
-      `Combined ask=${combinedAskCost.toFixed(3)} | Profit=${(potentialProfit * 100).toFixed(2)}%`
-    );
-    console.log(
-      `[Arb] Position: YES=${yesFilledSize.toFixed(0)}+${yesPendingBuy.toFixed(0)}pending NO=${noFilledSize.toFixed(0)}+${noPendingBuy.toFixed(0)}pending | ` +
-      `Effective: YES=${yesSize.toFixed(0)} NO=${noSize.toFixed(0)}`
-    );
-
     // Calculate position imbalance
     const totalSize = yesSize + noSize;
     const imbalance = totalSize > 0 ? Math.abs(yesSize - noSize) / Math.max(yesSize, noSize, 1) : 0;
@@ -306,11 +302,6 @@ export class ArbitrageExecutor implements IStrategyExecutor {
     // Use these for entry decisions
     const yesNeedsMore = yesCanBuy;
     const noNeedsMore = noCanBuy;
-
-    console.log(
-      `[Arb] Lagging=${laggingLeg} Imbalance=${(imbalance * 100).toFixed(1)}% ${isLargeImbalance ? '(AGGRESSIVE)' : '(passive)'} | ` +
-      `FilledDiff=${filledDiff.toFixed(0)} TotalDiff=${sizeDiff.toFixed(0)} / max=${scaledMaxPosition} | CanBuy: YES=${yesCanBuy} NO=${noCanBuy}`
-    );
 
     // SAFETY CHECK 4: Order throttling - check cooldown per leg (per-bot)
     // Use faster cooldown in close-out mode for urgent hedging
