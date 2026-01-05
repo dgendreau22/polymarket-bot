@@ -19,6 +19,7 @@ import {
 import { createTrade, updateTradeStatus, getTrades } from '../persistence/TradeRepository';
 import { getPosition, updatePosition, getOrCreatePosition, getBotById } from '../persistence/BotRepository';
 import { PRECISION } from '../constants';
+import { calculatePositionUpdate } from '../utils/PositionCalculator';
 import { v4 as uuidv4 } from 'uuid';
 
 /**
@@ -201,40 +202,32 @@ function updateTradeForOrderFill(
       console.warn(`[OrderMatcher] Cannot SELL ${fillAmount} - only have ${currentSize} shares. Skipping fill.`);
       return false;
     }
+  }
 
-    const avgEntryPrice = parseFloat(position.avg_entry_price);
-    // PnL = (sell_price - avg_entry_price) * fillAmount
-    pnl = (fillPriceNum - avgEntryPrice) * fillAmount;
+  // Use centralized position calculator
+  const currentAvgPrice = parseFloat(position.avg_entry_price);
+  const update = calculatePositionUpdate(
+    currentSize,
+    currentAvgPrice,
+    fillAmount,
+    fillPriceNum,
+    orderSide
+  );
 
-    // Update position: reduce size and add to realized PnL
-    const currentRealizedPnl = parseFloat(position.realized_pnl);
-    const newSize = Math.max(0, currentSize - fillAmount);
-    const newRealizedPnl = currentRealizedPnl + pnl;
+  pnl = update.realizedPnl;
+  const currentRealizedPnl = parseFloat(position.realized_pnl);
+  const newRealizedPnl = currentRealizedPnl + pnl;
 
-    updatePosition(botId, assetId, {
-      size: newSize.toFixed(6),
-      realizedPnl: newRealizedPnl.toFixed(6),
-      // Reset avg entry price if position is closed
-      avgEntryPrice: newSize <= PRECISION.FLOAT_TOLERANCE ? '0' : position.avg_entry_price,
-    });
+  updatePosition(botId, assetId, {
+    size: update.newSize.toFixed(6),
+    avgEntryPrice: update.newAvgPrice.toFixed(6),
+    realizedPnl: orderSide === 'SELL' ? newRealizedPnl.toFixed(6) : undefined,
+  });
 
-    console.log(`[OrderMatcher] SELL fill: ${fillAmount} @ ${fillPrice} | PnL: ${pnl.toFixed(4)} | Position: ${currentSize} -> ${newSize}`);
+  if (orderSide === 'SELL') {
+    console.log(`[OrderMatcher] SELL fill: ${fillAmount} @ ${fillPrice} | PnL: ${pnl.toFixed(4)} | Position: ${currentSize} -> ${update.newSize}`);
   } else {
-    // BUY: increase size and update avg entry price
-    const currentSize = parseFloat(position.size);
-    const currentAvgPrice = parseFloat(position.avg_entry_price);
-    const newSize = currentSize + fillAmount;
-
-    // Calculate new weighted average entry price
-    const totalCost = (currentSize * currentAvgPrice) + (fillAmount * fillPriceNum);
-    const newAvgPrice = newSize > 0 ? totalCost / newSize : fillPriceNum;
-
-    updatePosition(botId, assetId, {
-      size: newSize.toFixed(6),
-      avgEntryPrice: newAvgPrice.toFixed(6),
-    });
-
-    console.log(`[OrderMatcher] BUY fill: ${fillAmount} @ ${fillPrice} | Position: ${currentSize} -> ${newSize} @ avg ${newAvgPrice.toFixed(4)}`);
+    console.log(`[OrderMatcher] BUY fill: ${fillAmount} @ ${fillPrice} | Position: ${currentSize} -> ${update.newSize} @ avg ${update.newAvgPrice.toFixed(4)}`);
   }
 
   // Create a new filled trade record for THIS fill event (partial or full)

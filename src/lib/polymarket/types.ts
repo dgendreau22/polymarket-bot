@@ -181,7 +181,11 @@ export interface Order {
 
 export type OrderStatus = "LIVE" | "MATCHED" | "CANCELLED";
 
-export interface Position {
+/**
+ * Position type from Polymarket API (external format)
+ * Use bots/types.ts Position for internal domain type
+ */
+export interface PolymarketPosition {
   asset_id: string;
   market: string;
   size: string;

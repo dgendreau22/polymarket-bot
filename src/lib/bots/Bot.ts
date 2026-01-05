@@ -40,6 +40,7 @@ import {
   cancelStaleOrdersForOutcome,
   rowToLimitOrder,
 } from '../persistence/LimitOrderRepository';
+import { calculatePositionUpdate } from '../utils/PositionCalculator';
 
 export type BotEventHandler = (event: BotEvent) => void;
 
@@ -555,39 +556,31 @@ export class Bot {
    */
   private updatePositionFromTrade(trade: Trade): void {
     const currentSize = parseFloat(this.position.size);
+    const currentAvg = parseFloat(this.position.avgEntryPrice);
     const tradeQty = parseFloat(trade.quantity);
     const tradePrice = parseFloat(trade.price);
 
-    let newSize: number;
-    let newAvg: number;
-    let newPnl: number = parseFloat(this.position.realizedPnl);
+    // Use centralized position calculator
+    const update = calculatePositionUpdate(
+      currentSize,
+      currentAvg,
+      tradeQty,
+      tradePrice,
+      trade.side
+    );
 
-    if (trade.side === 'BUY') {
-      newSize = currentSize + tradeQty;
-      const currentAvg = parseFloat(this.position.avgEntryPrice);
-      newAvg = currentSize === 0
-        ? tradePrice
-        : (currentAvg * currentSize + tradePrice * tradeQty) / newSize;
-    } else {
-      newSize = Math.max(0, currentSize - tradeQty);
-      newAvg = parseFloat(this.position.avgEntryPrice);
-      const pnl = (tradePrice - newAvg) * tradeQty;
-      newPnl += pnl;
-      if (newSize <= 0) {
-        newAvg = 0;
-      }
-    }
+    const newPnl = parseFloat(this.position.realizedPnl) + update.realizedPnl;
 
-    this.position.size = newSize.toString();
-    this.position.avgEntryPrice = newAvg.toFixed(6);
+    this.position.size = update.newSize.toString();
+    this.position.avgEntryPrice = update.newAvgPrice.toFixed(6);
     this.position.realizedPnl = newPnl.toFixed(6);
 
     // Persist to database
     const assetId = trade.assetId || this.config.assetId || '';
     getOrCreatePosition(this.id, this.config.marketId, assetId, trade.outcome);
     updatePosition(this.id, assetId, {
-      size: newSize.toFixed(6),
-      avgEntryPrice: newAvg.toFixed(6),
+      size: update.newSize.toFixed(6),
+      avgEntryPrice: update.newAvgPrice.toFixed(6),
       realizedPnl: newPnl.toFixed(6),
     });
 

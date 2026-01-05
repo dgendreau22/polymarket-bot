@@ -9,6 +9,7 @@
 
 import { getBotManager } from './BotManager';
 import { getGammaClient } from '../polymarket/client';
+import { getETOffsetMinutes, formatTime12Hour } from '../utils/time';
 import type { BotConfig, BotMode, BotEvent } from './types';
 
 // ============================================================================
@@ -107,8 +108,6 @@ class Orchestrator {
   private lastError: string | null = null;
 
   // Market discovery constants
-  private readonly SEARCH_QUERY = 'Bitcoin Up or Down';
-  private readonly MARKET_PATTERN = /Bitcoin Up or Down - (\w+ \d{1,2}), (\d{1,2}):(\d{2})(AM|PM)-(\d{1,2}):(\d{2})(AM|PM) ET/i;
   private readonly SEARCH_INTERVAL_MS = 30000; // Check for new markets every 30 seconds
   private readonly MIN_SEARCH_INTERVAL_MS = 5000; // Rate limit: 5 seconds between searches
 
@@ -366,8 +365,7 @@ class Orchestrator {
 
     // Get current time in ET
     // ET offset: EST (winter) = UTC-5, EDT (summer) = UTC-4
-    const etOffsetMinutes = this.getETOffsetMinutes(now);
-    const etOffsetMs = etOffsetMinutes * 60 * 1000;
+    const etOffsetMs = getETOffsetMinutes(now) * 60 * 1000;
 
     // Current UTC time
     const nowUtcMs = now.getTime();
@@ -397,16 +395,10 @@ class Orchestrator {
       const endHour = endSlotEt.getUTCHours();
       const endMin = endSlotEt.getUTCMinutes();
 
-      const formatTime = (h: number, m: number): string => {
-        const period = h >= 12 ? 'PM' : 'AM';
-        const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-        return `${hour12}:${m.toString().padStart(2, '0')}${period}`;
-      };
-
       slots.push({
         timestamp,
-        startTimeET: formatTime(startHour, startMin),
-        endTimeET: formatTime(endHour, endMin),
+        startTimeET: formatTime12Hour(startHour, startMin),
+        endTimeET: formatTime12Hour(endHour, endMin),
       });
     }
 
@@ -414,98 +406,8 @@ class Orchestrator {
   }
 
   // ============================================================================
-  // Market Name Parsing
+  // Utility Methods
   // ============================================================================
-
-  /**
-   * Parse market name to extract date and time window
-   *
-   * Input: "Bitcoin Up or Down - January 2, 2:30PM-2:45PM ET"
-   * Output: { startTime: Date, endTime: Date }
-   */
-  private parseMarketName(name: string): { startTime: Date; endTime: Date } | null {
-    const match = name.match(this.MARKET_PATTERN);
-    if (!match) return null;
-
-    const [, dateStr, startHour, startMin, startPeriod, endHour, endMin, endPeriod] = match;
-
-    // Parse the date (assume current year, handle year rollover)
-    const currentYear = new Date().getFullYear();
-    let dateWithYear = `${dateStr}, ${currentYear}`;
-    let baseDate = new Date(dateWithYear);
-
-    // If the date is in the past by more than 6 months, it's probably next year
-    const now = new Date();
-    if (baseDate.getTime() < now.getTime() - 180 * 24 * 60 * 60 * 1000) {
-      dateWithYear = `${dateStr}, ${currentYear + 1}`;
-      baseDate = new Date(dateWithYear);
-    }
-
-    if (isNaN(baseDate.getTime())) return null;
-
-    // Convert 12-hour to 24-hour format
-    const start24Hour = this.to24Hour(parseInt(startHour), startPeriod as 'AM' | 'PM');
-    const end24Hour = this.to24Hour(parseInt(endHour), endPeriod as 'AM' | 'PM');
-
-    // Create start and end times in ET (Eastern Time)
-    // We'll create the times and then adjust for ET offset
-    const startTime = new Date(baseDate);
-    startTime.setHours(start24Hour, parseInt(startMin), 0, 0);
-
-    const endTime = new Date(baseDate);
-    endTime.setHours(end24Hour, parseInt(endMin), 0, 0);
-
-    // Handle day rollover (e.g., 11:45PM-12:00AM)
-    if (endTime <= startTime) {
-      endTime.setDate(endTime.getDate() + 1);
-    }
-
-    // Convert from ET to local time
-    // When we parsed "3:45PM", JavaScript created a Date for 3:45 PM LOCAL time.
-    // But we want it to represent 3:45 PM ET (Eastern Time).
-    //
-    // Example: User is in Central (UTC-6), market time is 3:45 PM ET (UTC-5)
-    // - Parsed Date = 3:45 PM Central = 21:45 UTC (wrong - too late by 1 hour)
-    // - Correct Date = 3:45 PM ET = 20:45 UTC = 2:45 PM Central
-    // - Adjustment: subtract (localOffset - etOffset) = subtract (360 - 300) = subtract 60 min
-    //
-    // getTimezoneOffset() returns minutes BEHIND UTC (positive for west of UTC)
-    // Central (UTC-6) = +360, ET (UTC-5) = +300
-    const localOffsetMinutes = startTime.getTimezoneOffset();
-    const etOffsetMinutes = this.getETOffsetMinutes(startTime);
-    const adjustmentMs = (localOffsetMinutes - etOffsetMinutes) * 60 * 1000;
-
-    startTime.setTime(startTime.getTime() - adjustmentMs);
-    endTime.setTime(endTime.getTime() - adjustmentMs);
-
-    return { startTime, endTime };
-  }
-
-  /**
-   * Get ET offset in minutes (in same format as getTimezoneOffset - positive for west of UTC)
-   * EST (Nov-Mar) = UTC-5 = +300 minutes
-   * EDT (Mar-Nov) = UTC-4 = +240 minutes
-   */
-  private getETOffsetMinutes(date: Date): number {
-    const month = date.getMonth();
-    // Rough DST handling: EDT (UTC-4) from March to November, EST (UTC-5) otherwise
-    // More accurate would be second Sunday in March to first Sunday in November
-    if (month >= 2 && month <= 10) {
-      return 240; // EDT: UTC-4 = +240 minutes behind UTC
-    }
-    return 300; // EST: UTC-5 = +300 minutes behind UTC
-  }
-
-  /**
-   * Convert 12-hour to 24-hour format
-   */
-  private to24Hour(hour: number, period: 'AM' | 'PM'): number {
-    if (period === 'AM') {
-      return hour === 12 ? 0 : hour;
-    } else {
-      return hour === 12 ? 12 : hour + 12;
-    }
-  }
 
   /**
    * Extract time window from market name for display
