@@ -23,21 +23,6 @@ export function getETOffsetMinutes(date: Date = new Date()): number {
 }
 
 /**
- * Convert 12-hour to 24-hour format
- *
- * @param hour - Hour in 12-hour format (1-12)
- * @param period - 'AM' or 'PM'
- * @returns Hour in 24-hour format (0-23)
- */
-export function to24Hour(hour: number, period: 'AM' | 'PM'): number {
-  if (period === 'AM') {
-    return hour === 12 ? 0 : hour;
-  } else {
-    return hour === 12 ? 12 : hour + 12;
-  }
-}
-
-/**
  * Format hour and minute to 12-hour time string
  *
  * @param hour - Hour in 24-hour format (0-23)
@@ -48,42 +33,4 @@ export function formatTime12Hour(hour: number, minute: number): string {
   const period = hour >= 12 ? 'PM' : 'AM';
   const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
   return `${hour12}:${minute.toString().padStart(2, '0')}${period}`;
-}
-
-/**
- * Convert a Date to Eastern Time representation
- * Returns a new Date object adjusted to ET (for calculation purposes)
- *
- * @param date - Date in local/UTC time
- * @returns Date adjusted to ET
- */
-export function toETDate(date: Date): Date {
-  const etOffsetMs = getETOffsetMinutes(date) * 60 * 1000;
-  return new Date(date.getTime() - etOffsetMs);
-}
-
-/**
- * Convert from ET to UTC
- *
- * @param etDate - Date representing ET time
- * @returns Date in UTC
- */
-export function fromETToUTC(etDate: Date): Date {
-  const etOffsetMs = getETOffsetMinutes(etDate) * 60 * 1000;
-  return new Date(etDate.getTime() + etOffsetMs);
-}
-
-/**
- * Adjust time from local timezone to ET
- * When we parse "3:45PM", JavaScript creates a Date for 3:45 PM LOCAL time.
- * This function adjusts it to represent 3:45 PM ET instead.
- *
- * @param localDate - Date parsed in local timezone
- * @returns Date adjusted to represent the same clock time in ET
- */
-export function adjustLocalToET(localDate: Date): Date {
-  const localOffsetMinutes = localDate.getTimezoneOffset();
-  const etOffsetMinutes = getETOffsetMinutes(localDate);
-  const adjustmentMs = (localOffsetMinutes - etOffsetMinutes) * 60 * 1000;
-  return new Date(localDate.getTime() - adjustmentMs);
 }

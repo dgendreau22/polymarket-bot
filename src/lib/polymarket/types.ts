@@ -168,31 +168,6 @@ export interface TickSize {
   timestamp: string;
 }
 
-export interface Order {
-  id: string;
-  market: string;
-  asset_id: string;
-  side: "BUY" | "SELL";
-  price: string;
-  size: string;
-  status: OrderStatus;
-  created_at: string;
-}
-
-export type OrderStatus = "LIVE" | "MATCHED" | "CANCELLED";
-
-/**
- * Position type from Polymarket API (external format)
- * Use bots/types.ts Position for internal domain type
- */
-export interface PolymarketPosition {
-  asset_id: string;
-  market: string;
-  size: string;
-  avgPrice: string;
-  side: "YES" | "NO";
-}
-
 export interface TradeSignal {
   market: string;
   asset_id: string;
@@ -216,10 +191,4 @@ export interface MarketMakerConfig {
   maxPosition: string; // Maximum position size
   minLiquidity: string; // Minimum liquidity threshold
   refreshInterval: number; // Milliseconds between order refreshes
-}
-
-export interface ArbitrageConfig {
-  minSpread: number; // Minimum spread to trigger arbitrage
-  maxSlippage: number; // Maximum allowed slippage
-  orderSize: string; // Size per arbitrage trade
 }

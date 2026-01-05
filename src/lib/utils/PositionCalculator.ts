@@ -17,15 +17,9 @@ export interface PositionUpdate {
 }
 
 /**
- * Calculate new position after a BUY trade
- *
- * @param currentSize - Current position size
- * @param currentAvg - Current average entry price
- * @param buySize - Size of the buy trade
- * @param buyPrice - Price of the buy trade
- * @returns Updated position metrics
+ * Calculate new position after a BUY trade (internal)
  */
-export function calculateBuyPosition(
+function calculateBuyPosition(
   currentSize: number,
   currentAvg: number,
   buySize: number,
@@ -46,15 +40,9 @@ export function calculateBuyPosition(
 }
 
 /**
- * Calculate new position after a SELL trade
- *
- * @param currentSize - Current position size
- * @param currentAvg - Current average entry price
- * @param sellSize - Size of the sell trade
- * @param sellPrice - Price of the sell trade
- * @returns Updated position metrics including realized PnL
+ * Calculate new position after a SELL trade (internal)
  */
-export function calculateSellPosition(
+function calculateSellPosition(
   currentSize: number,
   currentAvg: number,
   sellSize: number,

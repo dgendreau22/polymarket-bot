@@ -131,5 +131,3 @@ export function getConfig(): Omit<PolymarketConfig, "privateKey"> {
     gammaHost: config.gammaHost,
   };
 }
-
-export { config };
