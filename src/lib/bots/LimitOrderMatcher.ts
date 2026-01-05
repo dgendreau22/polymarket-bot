@@ -18,7 +18,20 @@ import {
 } from '../persistence/LimitOrderRepository';
 import { createTrade, updateTradeStatus, getTrades } from '../persistence/TradeRepository';
 import { getPosition, updatePosition, getOrCreatePosition, getBotById } from '../persistence/BotRepository';
+import { PRECISION } from '../constants';
 import { v4 as uuidv4 } from 'uuid';
+
+/**
+ * Check if an order is still open and available for filling
+ * Prevents race conditions by fetching fresh state from DB
+ */
+function isOrderOpenForFill(orderId: string): LimitOrderRow | null {
+  const freshOrder = getLimitOrderById(orderId);
+  if (!freshOrder || freshOrder.status === 'filled' || freshOrder.status === 'cancelled') {
+    return null;
+  }
+  return freshOrder;
+}
 
 /**
  * Process a market trade to check for order fills
@@ -38,8 +51,8 @@ export function processTradeForFills(lastTrade: LastTrade): FillResult[] {
 
   for (const order of openOrders) {
     // Get fresh order state from DB to prevent race conditions
-    const freshOrder = getLimitOrderById(order.id);
-    if (!freshOrder || freshOrder.status === 'filled' || freshOrder.status === 'cancelled') {
+    const freshOrder = isOrderOpenForFill(order.id);
+    if (!freshOrder) {
       continue; // Order already filled or cancelled by another process
     }
 
@@ -79,7 +92,7 @@ export function processTradeForFills(lastTrade: LastTrade): FillResult[] {
 
       const newFilledQuantity = filledQuantity + fillAmount;
       const newRemainingQuantity = orderQuantity - newFilledQuantity;
-      const isFullyFilled = newRemainingQuantity <= 0.000001; // Tolerance for floating point
+      const isFullyFilled = newRemainingQuantity <= PRECISION.FLOAT_TOLERANCE;
 
       // Determine new order status
       const newStatus = isFullyFilled ? 'filled' : 'partially_filled';
@@ -202,7 +215,7 @@ function updateTradeForOrderFill(
       size: newSize.toFixed(6),
       realizedPnl: newRealizedPnl.toFixed(6),
       // Reset avg entry price if position is closed
-      avgEntryPrice: newSize <= 0.000001 ? '0' : position.avg_entry_price,
+      avgEntryPrice: newSize <= PRECISION.FLOAT_TOLERANCE ? '0' : position.avg_entry_price,
     });
 
     console.log(`[OrderMatcher] SELL fill: ${fillAmount} @ ${fillPrice} | PnL: ${pnl.toFixed(4)} | Position: ${currentSize} -> ${newSize}`);
@@ -316,8 +329,8 @@ function fillSingleOrder(
   fillAmount: number
 ): FillResult | null {
   // Get fresh order state from DB to prevent race conditions
-  const freshOrder = getLimitOrderById(order.id);
-  if (!freshOrder || freshOrder.status === 'filled' || freshOrder.status === 'cancelled') {
+  const freshOrder = isOrderOpenForFill(order.id);
+  if (!freshOrder) {
     return null; // Order already filled or cancelled by another process
   }
 
@@ -348,7 +361,7 @@ function fillSingleOrder(
 
   const newFilledQuantity = filledQuantity + actualFillAmount;
   const newRemainingQuantity = orderQuantity - newFilledQuantity;
-  const isFullyFilled = newRemainingQuantity <= 0.000001;
+  const isFullyFilled = newRemainingQuantity <= PRECISION.FLOAT_TOLERANCE;
 
   const newStatus = isFullyFilled ? 'filled' : 'partially_filled';
 

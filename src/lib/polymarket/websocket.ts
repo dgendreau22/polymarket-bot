@@ -115,97 +115,28 @@ export class PolymarketWebSocket {
    * Subscribe to order book updates for specific assets
    */
   subscribeOrderBook(assetIds: string[], callback: OrderBookCallback): void {
-    const newAssets: string[] = [];
-
-    for (const assetId of assetIds) {
-      const callbacks = this.orderBookCallbacks.get(assetId) || [];
-      callbacks.push(callback);
-      this.orderBookCallbacks.set(assetId, callbacks);
-
-      // Track new assets that need subscription
-      if (!this.subscribedAssets.has(assetId)) {
-        newAssets.push(assetId);
-        this.subscribedAssets.add(assetId);
-      }
-    }
-
-    // Only send subscription for new assets
-    if (this.ws?.readyState === WebSocket.OPEN && newAssets.length > 0) {
-      this.sendSubscription(newAssets, "book");
-    }
+    this.addSubscription(assetIds, callback, this.orderBookCallbacks, "book");
   }
 
   /**
    * Subscribe to price updates for specific assets
    */
   subscribePrice(assetIds: string[], callback: PriceCallback): void {
-    const newAssets: string[] = [];
-
-    for (const assetId of assetIds) {
-      const callbacks = this.priceCallbacks.get(assetId) || [];
-      callbacks.push(callback);
-      this.priceCallbacks.set(assetId, callbacks);
-
-      // Track new assets that need subscription
-      if (!this.subscribedAssets.has(assetId)) {
-        newAssets.push(assetId);
-        this.subscribedAssets.add(assetId);
-      }
-    }
-
-    // Only send subscription for new assets
-    if (this.ws?.readyState === WebSocket.OPEN && newAssets.length > 0) {
-      this.sendSubscription(newAssets, "price");
-    }
+    this.addSubscription(assetIds, callback, this.priceCallbacks, "price");
   }
 
   /**
    * Subscribe to trade updates for specific assets
    */
   subscribeTrades(assetIds: string[], callback: TradeCallback): void {
-    const newAssets: string[] = [];
-
-    for (const assetId of assetIds) {
-      const callbacks = this.tradeCallbacks.get(assetId) || [];
-      callbacks.push(callback);
-      this.tradeCallbacks.set(assetId, callbacks);
-      console.log(`[WS] subscribeTrades: ${assetId.slice(0, 8)}... now has ${callbacks.length} callbacks`);
-
-      // Track new assets that need subscription
-      if (!this.subscribedAssets.has(assetId)) {
-        newAssets.push(assetId);
-        this.subscribedAssets.add(assetId);
-      }
-    }
-
-    // Only send subscription for new assets
-    if (this.ws?.readyState === WebSocket.OPEN && newAssets.length > 0) {
-      this.sendSubscription(newAssets, "book");
-    }
+    this.addSubscription(assetIds, callback, this.tradeCallbacks, "book");
   }
 
   /**
    * Subscribe to tick size updates for specific assets
    */
   subscribeTickSize(assetIds: string[], callback: TickSizeCallback): void {
-    const newAssets: string[] = [];
-
-    for (const assetId of assetIds) {
-      const callbacks = this.tickSizeCallbacks.get(assetId) || [];
-      callbacks.push(callback);
-      this.tickSizeCallbacks.set(assetId, callbacks);
-
-      // Track new assets that need subscription
-      if (!this.subscribedAssets.has(assetId)) {
-        newAssets.push(assetId);
-        this.subscribedAssets.add(assetId);
-      }
-    }
-
-    // Only send subscription for new assets
-    if (this.ws?.readyState === WebSocket.OPEN && newAssets.length > 0) {
-      this.sendSubscription(newAssets, "book");
-    }
+    this.addSubscription(assetIds, callback, this.tickSizeCallbacks, "book");
   }
 
   /**
@@ -235,26 +166,28 @@ export class PolymarketWebSocket {
    * Remove a specific order book callback (safe for UI cleanup)
    */
   removeOrderBookCallback(assetId: string, callback: OrderBookCallback): void {
-    const callbacks = this.orderBookCallbacks.get(assetId);
-    if (callbacks) {
-      const index = callbacks.indexOf(callback);
-      if (index !== -1) {
-        callbacks.splice(index, 1);
-      }
-    }
+    this.removeCallback(assetId, callback, this.orderBookCallbacks);
+  }
+
+  /**
+   * Remove a specific price callback (safe for UI cleanup)
+   */
+  removePriceCallback(assetId: string, callback: PriceCallback): void {
+    this.removeCallback(assetId, callback, this.priceCallbacks);
   }
 
   /**
    * Remove a specific trade callback (safe for UI cleanup)
    */
   removeTradeCallback(assetId: string, callback: TradeCallback): void {
-    const callbacks = this.tradeCallbacks.get(assetId);
-    if (callbacks) {
-      const index = callbacks.indexOf(callback);
-      if (index !== -1) {
-        callbacks.splice(index, 1);
-      }
-    }
+    this.removeCallback(assetId, callback, this.tradeCallbacks);
+  }
+
+  /**
+   * Remove a specific tick size callback (safe for UI cleanup)
+   */
+  removeTickSizeCallback(assetId: string, callback: TickSizeCallback): void {
+    this.removeCallback(assetId, callback, this.tickSizeCallbacks);
   }
 
   /**
@@ -269,6 +202,51 @@ export class PolymarketWebSocket {
    */
   isConnected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * Generic subscription helper to reduce duplication
+   * Adds callback to the appropriate map and tracks new assets for subscription
+   */
+  private addSubscription<T>(
+    assetIds: string[],
+    callback: T,
+    callbackMap: Map<string, T[]>,
+    subscriptionType: "book" | "price"
+  ): void {
+    const newAssets: string[] = [];
+
+    for (const assetId of assetIds) {
+      const callbacks = callbackMap.get(assetId) || [];
+      callbacks.push(callback);
+      callbackMap.set(assetId, callbacks);
+
+      if (!this.subscribedAssets.has(assetId)) {
+        newAssets.push(assetId);
+        this.subscribedAssets.add(assetId);
+      }
+    }
+
+    if (this.ws?.readyState === WebSocket.OPEN && newAssets.length > 0) {
+      this.sendSubscription(newAssets, subscriptionType);
+    }
+  }
+
+  /**
+   * Remove a specific callback from a callback map
+   */
+  private removeCallback<T>(
+    assetId: string,
+    callback: T,
+    callbackMap: Map<string, T[]>
+  ): void {
+    const callbacks = callbackMap.get(assetId);
+    if (callbacks) {
+      const index = callbacks.indexOf(callback);
+      if (index !== -1) {
+        callbacks.splice(index, 1);
+      }
+    }
   }
 
   private sendSubscription(
