@@ -170,14 +170,6 @@ export class ArbitrageExecutor implements IStrategyExecutor {
     // 5. Analyze positions
     const analysis = analyzePositions(context, config.imbalanceThreshold, config.orderSize);
 
-    // Log initial building mode
-    const yesSizeForCeiling = analysis.yesFilledSize;
-    const noSizeForCeiling = analysis.noFilledSize;
-    const maxPositionReached = yesSizeForCeiling >= scaledMaxPosition || noSizeForCeiling >= scaledMaxPosition;
-    if (!maxPositionReached) {
-      console.log(`[Arb] Initial building mode (neither leg >= ${scaledMaxPosition})`);
-    }
-
     // 6. Make decision
     const decision = decisionEngine.decide(
       bot.config.id,

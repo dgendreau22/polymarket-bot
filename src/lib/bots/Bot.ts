@@ -21,6 +21,7 @@ import type {
   FillResult,
   ExecutorMetadata,
   PendingOrderStats,
+  MarketResolution,
 } from './types';
 import type { OrderBook, LastTrade, TickSize } from '../polymarket/types';
 import { getExecutor } from '../strategies/registry';
@@ -41,6 +42,7 @@ import {
   rowToLimitOrder,
 } from '../persistence/LimitOrderRepository';
 import { calculatePositionUpdate } from '../utils/PositionCalculator';
+import { detectResolution, settleAllPositions } from '../utils/MarketResolver';
 
 export type BotEventHandler = (event: BotEvent) => void;
 
@@ -848,19 +850,60 @@ export class Bot {
   }
 
   private async handleMarketClosed(): Promise<void> {
-    console.log(`[Bot ${this.id}] Market closed - stopping bot and cancelling pending orders`);
+    console.log(`[Bot ${this.id}] Market closed - settling positions`);
 
+    // 1. Cancel all pending orders first
     const cancelledCount = cancelAllBotOrders(this.id);
     if (cancelledCount > 0) {
       console.log(`[Bot ${this.id}] Cancelled ${cancelledCount} pending orders due to market closure`);
     }
 
-    this.emitEvent({
-      type: 'ERROR',
-      error: 'Market closed - bot auto-stopped',
-      timestamp: new Date(),
-    });
+    // 2. Detect winning outcome from last trade prices
+    const lastTrades = this.marketData?.getAllLastTrades() || new Map();
+    const resolution = detectResolution(lastTrades);
 
+    if (resolution.winningOutcome !== 'UNKNOWN') {
+      // 3. Settle all positions at resolution prices
+      const settlements = settleAllPositions(this.id, resolution);
+      const totalPnl = settlements.reduce((sum, s) => sum + s.realizedPnl, 0);
+
+      // 4. Build resolution event data
+      const marketResolution: MarketResolution = {
+        winningOutcome: resolution.winningOutcome,
+        yesResolutionPrice: resolution.yesResolutionPrice,
+        noResolutionPrice: resolution.noResolutionPrice,
+        settlements: settlements.map(s => ({
+          outcome: s.outcome,
+          size: s.originalSize,
+          entryPrice: s.avgEntryPrice,
+          settlementPrice: s.settlementPrice,
+          pnl: s.realizedPnl,
+        })),
+        totalRealizedPnl: totalPnl,
+      };
+
+      // 5. Emit resolution event
+      this.emitEvent({
+        type: 'MARKET_RESOLVED',
+        resolution: marketResolution,
+        timestamp: new Date(),
+      });
+
+      console.log(
+        `[Bot ${this.id}] Market resolved - ${resolution.winningOutcome} won | ` +
+        `Settlements: ${settlements.length} | Total PnL: ${totalPnl.toFixed(4)}`
+      );
+    } else {
+      // Could not determine resolution - emit error
+      this.emitEvent({
+        type: 'ERROR',
+        error: 'Market closed - could not determine resolution. Positions remain unsettled.',
+        timestamp: new Date(),
+      });
+      console.warn(`[Bot ${this.id}] Could not determine market resolution from last trade prices`);
+    }
+
+    // 6. Stop the bot
     await this.stop();
 
     updateBotState(this.id, 'stopped', {

@@ -169,6 +169,14 @@ export class MarketDataManager {
   }
 
   /**
+   * Get all last trades (for market resolution detection)
+   * Returns a copy to prevent external modification
+   */
+  getAllLastTrades(): Map<string, LastTrade> {
+    return new Map(this.lastTrades);
+  }
+
+  /**
    * Get current price as { yes: string, no: string } for backward compatibility
    */
   getCurrentPrice(): { yes: string; no: string } {
