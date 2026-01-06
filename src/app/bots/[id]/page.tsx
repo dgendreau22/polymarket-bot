@@ -18,6 +18,7 @@ import {
 import { getWebSocket } from "@/lib/polymarket/websocket";
 import type { BotInstance, Trade, StrategyDefinition, LimitOrder, Position } from "@/lib/bots/types";
 import type { LastTrade, OrderBook, OrderBookEntry } from "@/lib/polymarket/types";
+import { calculateRealizedPnl, calculateUnrealizedPnl, calculateAvgPrice } from "@/lib/bots/pnl";
 import { cn } from "@/lib/utils";
 import { CircleDot, XCircle, ChevronUp, ChevronDown } from "lucide-react";
 
@@ -656,16 +657,15 @@ export default function BotDetailPage() {
 
   const strategyName = formatStrategyName(bot.config.strategySlug);
   const isArbitrage = bot.config.strategySlug === 'arbitrage';
-  // For arbitrage bots, sum realized PnL from all positions; otherwise use metrics
-  const pnl = isArbitrage
-    ? positions.reduce((sum, p) => sum + parseFloat(p.realizedPnl), 0)
-    : parseFloat(bot.metrics.totalPnl);
+
   // For arbitrage bots, calculate total position from positions array (DB source)
   // For non-arbitrage, use bot.position (in-memory)
   const positionSize = isArbitrage
     ? positions.reduce((sum, p) => sum + parseFloat(p.size), 0)
     : parseFloat(bot.position.size);
-  const avgPrice = parseFloat(bot.position.avgEntryPrice);
+  // Calculate avg price using shared utility for consistency
+  const avgPrice = calculateAvgPrice(positions);
+
   // Win rate based on trades with outcomes (winning + losing), not all trades
   const tradesWithOutcome = bot.metrics.winningTrades + bot.metrics.losingTrades;
   const winRate = tradesWithOutcome > 0
@@ -675,16 +675,16 @@ export default function BotDetailPage() {
   // Current price from last trade (for unrealized PnL calculation)
   const currentPrice = lastTrade?.price ? parseFloat(lastTrade.price) : 0;
 
-  // Realized PnL from closed trades
-  const realizedPnl = parseFloat(bot.position.realizedPnl);
+  // Calculate PnL using shared utilities for consistency
+  const yesCurrentPrice = lastTrade?.price ? parseFloat(lastTrade.price) : 0;
+  const noCurrentPrice = noLastTrade?.price ? parseFloat(noLastTrade.price) : 0;
 
-  // Unrealized PnL = (current_price - avg_entry) * position_size
-  const unrealizedPnl = positionSize > 0 && currentPrice > 0
-    ? (currentPrice - avgPrice) * positionSize
-    : 0;
+  const realizedPnl = calculateRealizedPnl(positions);
+  const unrealizedPnl = calculateUnrealizedPnl(positions, yesCurrentPrice, noCurrentPrice);
 
-  // Total PnL = realized + unrealized
-  const totalPositionPnl = realizedPnl + unrealizedPnl;
+  // Total PnL = realized + unrealized (used in header)
+  const pnl = realizedPnl + unrealizedPnl;
+  const totalPositionPnl = pnl;
 
   // Position value at current price
   const positionValue = positionSize * currentPrice;

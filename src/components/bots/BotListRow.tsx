@@ -7,6 +7,7 @@ import { BotStatusBadge } from "./BotStatusBadge";
 import { BotControls } from "./BotControls";
 import { TrendingUp, TrendingDown, Trash2 } from "lucide-react";
 import type { BotInstance } from "@/lib/bots/types";
+import { calculateRealizedPnl, calculateAvgPrice } from "@/lib/bots/pnl";
 
 interface BotListRowProps {
   bot: BotInstance;
@@ -23,7 +24,6 @@ function formatStrategyName(slug: string): string {
 
 export function BotListRow({ bot, onStateChange }: BotListRowProps) {
   const [deleting, setDeleting] = useState(false);
-  const pnl = parseFloat(bot.metrics.totalPnl);
   const unrealizedPnl = parseFloat(bot.metrics.unrealizedPnl);
   const strategyName = formatStrategyName(bot.config.strategySlug);
 
@@ -35,18 +35,14 @@ export function BotListRow({ bot, onStateChange }: BotListRowProps) {
   const noSize = noPosition ? parseFloat(noPosition.size) : 0;
   const totalSize = bot.totalPositionSize ?? (yesSize + noSize);
 
-  // Calculate average price (weighted average if multiple positions)
-  const yesAvg = yesPosition ? parseFloat(yesPosition.avgEntryPrice) : 0;
-  const noAvg = noPosition ? parseFloat(noPosition.avgEntryPrice) : 0;
-  const avgPrice = totalSize > 0
-    ? (yesSize * yesAvg + noSize * noAvg) / totalSize
-    : 0;
+  // Calculate average price using shared utility
+  const avgPrice = calculateAvgPrice(positions);
 
-  // Calculate realized PnL from positions
-  const realizedPnl = positions.reduce(
-    (sum, p) => sum + parseFloat(p.realizedPnl),
-    0
-  );
+  // Calculate realized PnL using shared utility for consistency
+  const realizedPnl = calculateRealizedPnl(positions);
+
+  // Total PnL = realized + unrealized
+  const pnl = realizedPnl + unrealizedPnl;
 
   const isArbitrage = bot.config.strategySlug === 'arbitrage' || (yesSize > 0 && noSize > 0);
 
@@ -88,7 +84,7 @@ export function BotListRow({ bot, onStateChange }: BotListRowProps) {
   };
 
   return (
-    <div className="grid grid-cols-[1fr_100px_180px_80px_100px_70px_110px] gap-2 px-3 py-2 items-center hover:bg-muted/50 rounded transition-colors text-sm">
+    <div className="grid grid-cols-[1fr_100px_120px_60px_80px_80px_80px_70px_110px] gap-2 px-3 py-2 items-center hover:bg-muted/50 rounded transition-colors text-sm">
       {/* Market */}
       <Link
         href={`/bots/${bot.config.id}`}
@@ -103,12 +99,14 @@ export function BotListRow({ bot, onStateChange }: BotListRowProps) {
         <BotStatusBadge state={bot.state} mode={bot.config.mode} />
       </div>
 
-      {/* Position with legs and avg price */}
+      {/* Position */}
       <div className="text-right font-mono text-xs">
-        <span>{formatPosition()}</span>
-        {totalSize > 0 && (
-          <span className="text-muted-foreground ml-1">@{avgPrice.toFixed(2)}</span>
-        )}
+        {formatPosition()}
+      </div>
+
+      {/* Avg Price */}
+      <div className="text-right font-mono text-xs text-muted-foreground">
+        {totalSize > 0 ? avgPrice.toFixed(2) : "—"}
       </div>
 
       {/* Total PnL */}
@@ -123,15 +121,14 @@ export function BotListRow({ bot, onStateChange }: BotListRowProps) {
         ${pnl.toFixed(2)}
       </div>
 
-      {/* Realized / Unrealized PnL */}
-      <div className="text-right font-mono text-xs">
-        <span className={realizedPnl >= 0 ? "text-green-500" : "text-red-500"}>
-          R:${realizedPnl.toFixed(2)}
-        </span>
-        <span className="text-muted-foreground mx-1">/</span>
-        <span className={unrealizedPnl >= 0 ? "text-green-500" : "text-red-500"}>
-          U:${unrealizedPnl.toFixed(2)}
-        </span>
+      {/* Realized PnL */}
+      <div className={`text-right font-mono text-xs ${realizedPnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+        ${realizedPnl.toFixed(2)}
+      </div>
+
+      {/* Unrealized PnL */}
+      <div className={`text-right font-mono text-xs ${unrealizedPnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+        ${unrealizedPnl.toFixed(2)}
       </div>
 
       {/* Trades */}

@@ -43,6 +43,7 @@ import {
 } from '../persistence/LimitOrderRepository';
 import { calculatePositionUpdate } from '../utils/PositionCalculator';
 import { detectResolution, settleAllPositions } from '../utils/MarketResolver';
+import { calculateUnrealizedPnl } from './pnl';
 
 export type BotEventHandler = (event: BotEvent) => void;
 
@@ -402,6 +403,9 @@ export class Bot {
     const yesPrices = this.marketData.getPrices('YES');
     const noPrices = this.marketData.getPrices('NO');
 
+    // Update unrealized PnL based on current prices
+    this.updateUnrealizedPnl(positions);
+
     // Build context
     const context: StrategyContext = {
       bot: this.toInstance(),
@@ -609,6 +613,28 @@ export class Bot {
    */
   setMetrics(metrics: BotMetrics): void {
     this.metrics = metrics;
+  }
+
+  /**
+   * Update unrealized PnL based on current market prices
+   */
+  private updateUnrealizedPnl(positions: Position[]): void {
+    // Get lastTrade prices and order book prices as fallback
+    const yesLastTrade = this.marketData?.getLastTrade('YES');
+    const noLastTrade = this.marketData?.getLastTrade('NO');
+    const yesPrices = this.marketData?.getPrices('YES');
+    const noPrices = this.marketData?.getPrices('NO');
+
+    // Use lastTrade price, fall back to midPrice from order book
+    const yesCurrentPrice = yesLastTrade?.price
+      ? parseFloat(yesLastTrade.price)
+      : (yesPrices?.midPrice ?? 0);
+    const noCurrentPrice = noLastTrade?.price
+      ? parseFloat(noLastTrade.price)
+      : (noPrices?.midPrice ?? 0);
+
+    const unrealized = calculateUnrealizedPnl(positions, yesCurrentPrice, noCurrentPrice);
+    this.metrics.unrealizedPnl = unrealized.toFixed(6);
   }
 
   /**

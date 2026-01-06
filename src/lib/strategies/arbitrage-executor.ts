@@ -103,7 +103,7 @@ export class ArbitrageExecutor implements IStrategyExecutor {
   readonly metadata: ExecutorMetadata = {
     requiredAssets: [
       { configKey: 'assetId', label: 'YES', subscriptions: ['orderBook', 'price', 'trades'] },
-      { configKey: 'noAssetId', label: 'NO', subscriptions: ['orderBook', 'price'] },
+      { configKey: 'noAssetId', label: 'NO', subscriptions: ['orderBook', 'price', 'trades'] },
     ],
     positionHandler: 'multi',
     staleOrderRules: {

@@ -25,12 +25,14 @@ export function BotList({
   return (
     <div>
       {/* Header row */}
-      <div className="grid grid-cols-[1fr_100px_180px_80px_100px_70px_110px] gap-2 px-3 py-2 text-xs text-muted-foreground border-b">
+      <div className="grid grid-cols-[1fr_100px_120px_60px_80px_80px_80px_70px_110px] gap-2 px-3 py-2 text-xs text-muted-foreground border-b">
         <span>Market</span>
         <span>Status</span>
         <span className="text-right">Position</span>
+        <span className="text-right">Avg</span>
         <span className="text-right">PnL</span>
-        <span className="text-right">R/U PnL</span>
+        <span className="text-right">Realized</span>
+        <span className="text-right">Unrealized</span>
         <span className="text-right">Trades</span>
         <span className="text-right">Actions</span>
       </div>
