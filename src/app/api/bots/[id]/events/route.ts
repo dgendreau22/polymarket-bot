@@ -73,8 +73,17 @@ export async function GET(
       const eventHandler = (event: BotEvent) => {
         send('event', event);
 
-        // For trade/fill events, also send updated data
-        if (event.type === 'TRADE_EXECUTED' || event.type === 'ORDER_FILLED') {
+        // For trade/fill/resolution/state-change events, send updated data
+        const dataRefreshEvents = [
+          'TRADE_EXECUTED',
+          'ORDER_FILLED',
+          'MARKET_RESOLVED',
+          'STARTED',
+          'STOPPED',
+          'PAUSED',
+          'RESUMED',
+        ];
+        if (dataRefreshEvents.includes(event.type)) {
           // Use setImmediate to ensure position updates complete before we fetch and send data
           setImmediate(() => {
             // Send updated bot instance (for metrics)

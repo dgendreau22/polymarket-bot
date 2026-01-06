@@ -95,7 +95,7 @@ export interface PositionRow {
 // ============================================================================
 
 /** Trade status */
-export type TradeStatus = 'pending' | 'filled' | 'cancelled' | 'failed';
+export type TradeStatus = 'pending' | 'filled' | 'cancelled' | 'failed' | 'settlement';
 
 /** Trade record */
 export interface Trade {
@@ -392,6 +392,24 @@ export interface PendingOrderStats {
 // Event Types
 // ============================================================================
 
+/** Settlement summary for a single position */
+export interface SettlementSummary {
+  outcome: 'YES' | 'NO';
+  size: number;
+  entryPrice: number;
+  settlementPrice: number;
+  pnl: number;
+}
+
+/** Market resolution result */
+export interface MarketResolution {
+  winningOutcome: 'YES' | 'NO';
+  yesResolutionPrice: number;
+  noResolutionPrice: number;
+  settlements: SettlementSummary[];
+  totalRealizedPnl: number;
+}
+
 /** Bot lifecycle events */
 export type BotEvent =
   | { type: 'STARTED'; timestamp: Date }
@@ -400,4 +418,5 @@ export type BotEvent =
   | { type: 'RESUMED'; timestamp: Date }
   | { type: 'TRADE_EXECUTED'; trade: Trade }
   | { type: 'ORDER_FILLED'; fill: FillResult; timestamp: Date }
-  | { type: 'ERROR'; error: string; timestamp: Date };
+  | { type: 'ERROR'; error: string; timestamp: Date }
+  | { type: 'MARKET_RESOLVED'; resolution: MarketResolution; timestamp: Date };

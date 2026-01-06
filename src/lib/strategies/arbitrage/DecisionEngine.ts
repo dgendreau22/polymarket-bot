@@ -58,7 +58,6 @@ export class DecisionEngine {
 
     // Check if both legs on cooldown (skip cycle)
     if (this.state.areBothOnCooldown(botId, effectiveCooldown) && !isCloseOutMode) {
-      console.log(`[Arb] Both legs on cooldown, skipping cycle`);
       return null;
     }
 
@@ -229,7 +228,6 @@ export class DecisionEngine {
     // Check cooldown (bypass for lagging leg in close-out mode)
     const onCooldown = this.state.isOnCooldown(botId, leg, cooldownMs);
     if (onCooldown && !(isCloseOutMode && isLagging)) {
-      console.log(`[Arb] ${leg} on cooldown, skipping`);
       return false;
     }
 

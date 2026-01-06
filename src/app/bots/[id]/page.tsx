@@ -655,8 +655,11 @@ export default function BotDetailPage() {
   }
 
   const strategyName = formatStrategyName(bot.config.strategySlug);
-  const pnl = parseFloat(bot.metrics.totalPnl);
   const isArbitrage = bot.config.strategySlug === 'arbitrage';
+  // For arbitrage bots, sum realized PnL from all positions; otherwise use metrics
+  const pnl = isArbitrage
+    ? positions.reduce((sum, p) => sum + parseFloat(p.realizedPnl), 0)
+    : parseFloat(bot.metrics.totalPnl);
   // For arbitrage bots, calculate total position from positions array (DB source)
   // For non-arbitrage, use bot.position (in-memory)
   const positionSize = isArbitrage
