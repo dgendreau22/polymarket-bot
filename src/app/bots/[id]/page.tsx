@@ -12,6 +12,7 @@ import {
 import { Countdown } from "@/components/ui/countdown";
 import { BotStatusBadge, BotControls } from "@/components/bots";
 import { TradesTable } from "@/components/trades";
+import { PriceChart } from "@/components/charts";
 const POLL_INTERVAL_MS = 3000;
 
 import {
@@ -800,8 +801,10 @@ export default function BotDetailPage() {
           </div>
         </div>
 
-        {/* Current Position */}
-        <div className="bg-card border rounded-lg p-6 mb-6">
+        {/* Current Position + Price Chart */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+          {/* Current Position */}
+          <div className="lg:col-span-2 bg-card border rounded-lg p-6">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
               <h2 className="font-semibold">Current Position</h2>
@@ -1033,6 +1036,21 @@ export default function BotDetailPage() {
           ) : (
             <p className="text-muted-foreground">No active position</p>
           )}
+          </div>
+
+          {/* Price Chart */}
+          <div className="bg-card border rounded-lg p-6 flex flex-col">
+            <h2 className="font-semibold mb-3">Price (15s)</h2>
+            <div className="flex-1 min-h-[200px]">
+              <PriceChart
+                price={lastTrade ? parseFloat(lastTrade.price) : null}
+                timestamp={lastTrade?.timestamp ?? null}
+                pnl={pnl}
+                intervalSeconds={15}
+                height={220}
+              />
+            </div>
+          </div>
         </div>
 
         {/* Market Data, Pending Orders & Recent Trades - Side by Side */}
@@ -1161,7 +1179,7 @@ export default function BotDetailPage() {
                   <div className="border-t pt-4">
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="text-sm font-medium text-muted-foreground">
-                        UP Order Book (Top 10)
+                        YES Order Book (Top 10)
                       </h3>
                       <span className="text-xs text-green-500 inline-flex items-center gap-1">
                         <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
@@ -1276,7 +1294,7 @@ export default function BotDetailPage() {
 
                 {/* Order Book Table */}
                 {orderBook && (
-                  <div className="mt-6 pt-6 border-t">
+                  <div className="mt-4 pt-4 border-t">
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="text-sm font-medium text-muted-foreground">
                         Order Book (Top 10)
