@@ -1579,16 +1579,18 @@ export default function BotDetailPage() {
                   {strategy.parameters.map((param) => (
                     <tr key={param.name} className="border-b last:border-0">
                       <td className="py-2 pr-4 font-mono text-blue-500">{param.name}</td>
-                      <td className="py-2 font-mono">
-                        {String(configuredParams[param.name] ?? param.default)}
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Info className="w-4 h-4 ml-2 inline-block text-muted-foreground cursor-help align-text-bottom" />
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p className="max-w-xs">{param.description}</p>
-                          </TooltipContent>
-                        </Tooltip>
+                      <td className="py-2">
+                        <div className="flex items-center gap-2 font-mono">
+                          <span>{String(configuredParams[param.name] ?? param.default)}</span>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Info className="w-4 h-4 text-muted-foreground cursor-help flex-shrink-0" />
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p className="max-w-xs">{param.description}</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </div>
                       </td>
                     </tr>
                   ))}
