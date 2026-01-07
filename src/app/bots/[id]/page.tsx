@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Countdown } from "@/components/ui/countdown";
@@ -1569,34 +1568,32 @@ export default function BotDetailPage() {
           <div className="bg-card border rounded-lg p-6 mb-6">
             <h2 className="font-semibold mb-3">Parameters</h2>
             <div className="overflow-x-auto">
-              <TooltipProvider>
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-left text-muted-foreground">
-                      <th className="pb-2 pr-4">Name</th>
-                      <th className="pb-2">Value</th>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-muted-foreground">
+                    <th className="pb-2 pr-4">Name</th>
+                    <th className="pb-2">Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {strategy.parameters.map((param) => (
+                    <tr key={param.name} className="border-b last:border-0">
+                      <td className="py-2 pr-4 font-mono text-blue-500">{param.name}</td>
+                      <td className="py-2 font-mono">
+                        {String(configuredParams[param.name] ?? param.default)}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="w-4 h-4 ml-2 inline-block text-muted-foreground cursor-help align-text-bottom" />
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p className="max-w-xs">{param.description}</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {strategy.parameters.map((param) => (
-                      <tr key={param.name} className="border-b last:border-0">
-                        <td className="py-2 pr-4 font-mono text-blue-500">{param.name}</td>
-                        <td className="py-2 font-mono">
-                          {String(configuredParams[param.name] ?? param.default)}
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Info className="w-4 h-4 ml-2 inline-block text-muted-foreground cursor-help align-text-bottom" />
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p className="max-w-xs">{param.description}</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </TooltipProvider>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
