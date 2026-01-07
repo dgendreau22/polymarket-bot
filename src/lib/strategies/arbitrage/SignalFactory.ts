@@ -64,3 +64,33 @@ export function createBuySignal(
     confidence: aggressive ? 0.9 : 0.95,
   };
 }
+
+/**
+ * Create a SELL signal for a specific leg (used in close-out mode to unwind positions)
+ *
+ * @param leg - 'YES' or 'NO'
+ * @param bestBid - Best bid price (sell at this price)
+ * @param orderSize - Quantity to sell
+ * @param tickSize - Market tick size
+ * @param entryAvg - Average entry price (for profit calculation)
+ */
+export function createSellSignal(
+  leg: 'YES' | 'NO',
+  bestBid: number,
+  orderSize: number,
+  tickSize: number,
+  entryAvg: number
+): StrategySignal {
+  const price = roundToTick(bestBid, tickSize);
+  const profit = (bestBid - entryAvg) * orderSize;
+  const reason = `Arb[UNWIND]: SELL ${leg} @ ${price} (bid=${bestBid.toFixed(3)}, entry=${entryAvg.toFixed(3)}, profit=$${profit.toFixed(2)})`;
+
+  return {
+    action: 'SELL',
+    side: leg,
+    price,
+    quantity: String(orderSize),
+    reason,
+    confidence: 0.95,
+  };
+}

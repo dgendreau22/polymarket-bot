@@ -252,8 +252,9 @@ export class Bot {
 
       if (response.ok) {
         const market = await response.json();
-        if (market.endDateIso) {
-          this.marketEndTime = new Date(market.endDateIso);
+        // Use endDate (full timestamp) instead of endDateIso (date only)
+        if (market.endDate) {
+          this.marketEndTime = new Date(market.endDate);
           console.log(`[Bot ${this.id.slice(0, 8)}] Market ends at: ${this.marketEndTime.toISOString()}`);
         }
       }
@@ -802,6 +803,7 @@ export class Bot {
       stoppedAt: this.stoppedAt,
       totalPositionSize,
       positions,
+      marketEndTime: this.marketEndTime,
     };
   }
 
@@ -892,6 +894,9 @@ export class Bot {
       // 3. Settle all positions at resolution prices
       const settlements = settleAllPositions(this.id, resolution);
       const totalPnl = settlements.reduce((sum, s) => sum + s.realizedPnl, 0);
+
+      // Reset unrealized PnL since positions are now settled
+      this.metrics.unrealizedPnl = '0';
 
       // 4. Build resolution event data
       const marketResolution: MarketResolution = {

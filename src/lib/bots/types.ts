@@ -42,6 +42,8 @@ export interface BotInstance {
   totalPositionSize?: number;
   /** All positions for this bot (YES and NO for arbitrage) */
   positions?: Position[];
+  /** Market end/close time (from Gamma API) */
+  marketEndTime?: Date;
 }
 
 /** Database row for bot */

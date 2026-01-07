@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { Countdown } from "@/components/ui/countdown";
 import { BotStatusBadge, BotControls } from "@/components/bots";
 import { TradesTable } from "@/components/trades";
 import {
@@ -712,12 +713,20 @@ export default function BotDetailPage() {
                   <h1 className="text-xl font-bold">{strategyName}</h1>
                   <BotStatusBadge state={bot.state} mode={bot.config.mode} />
                 </div>
-                <Link
-                  href={`/market/${bot.config.marketId}`}
-                  className="text-sm text-muted-foreground hover:text-primary"
-                >
-                  {bot.config.marketName || bot.config.marketId}
-                </Link>
+                <div className="flex items-center gap-2">
+                  <Link
+                    href={`/market/${bot.config.marketId}`}
+                    className="text-sm text-muted-foreground hover:text-primary"
+                  >
+                    {bot.config.marketName || bot.config.marketId}
+                  </Link>
+                  {bot.marketEndTime && (
+                    <>
+                      <span className="text-muted-foreground">·</span>
+                      <Countdown targetDate={new Date(bot.marketEndTime)} />
+                    </>
+                  )}
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-3">

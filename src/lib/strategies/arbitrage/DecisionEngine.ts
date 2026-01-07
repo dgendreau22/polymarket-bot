@@ -27,6 +27,7 @@ export interface MarketData {
  */
 export interface TradeDecision {
   leg: 'YES' | 'NO';
+  side: 'BUY' | 'SELL';
   aggressive: boolean;
   orderSize: number;
 }
@@ -83,6 +84,8 @@ export class DecisionEngine {
 
   /**
    * Priority 0: Force hedge the lagging leg in close-out mode
+   * First tries to SELL the leading leg if price is high enough,
+   * then falls back to buying the lagging leg.
    */
   private tryCloseOutDecision(
     botId: string,
@@ -90,6 +93,14 @@ export class DecisionEngine {
     marketData: MarketData,
     cooldownMs: number
   ): TradeDecision | null {
+    // First, try to SELL leading leg if price is high enough
+    const sellDecision = this.trySellLeadingLeg(analysis, marketData);
+    if (sellDecision) {
+      console.log(`[Arb] CLOSE-OUT: Selling ${sellDecision.orderSize.toFixed(0)} ${sellDecision.leg} to reduce exposure`);
+      return sellDecision;
+    }
+
+    // Fall back to buying lagging leg
     const leg = analysis.laggingLeg;
 
     if (!this.canBuyLeg(botId, leg, analysis, true, cooldownMs, 0)) {
@@ -106,14 +117,67 @@ export class DecisionEngine {
 
     // Check price ceiling even in close-out mode
     if (!this.validator.isLegPriceAcceptable(leg, closeOutPrice, otherAvg)) {
-      console.log(`[Arb] CLOSE-OUT: Skipping ${leg} - price ${closeOutPrice.toFixed(3)} too high`);
+      console.log(`[Arb] CLOSE-OUT: Skipping ${leg} buy - price ${closeOutPrice.toFixed(3)} too high`);
       return null;
     }
 
     console.log(`[Arb] CLOSE-OUT: Buying ${closeOutSize.toFixed(0)} ${leg} to hedge (imbalance=${analysis.sizeDiff.toFixed(0)})`);
 
     this.state.recordOrder(botId, leg);
-    return { leg, aggressive: true, orderSize: closeOutSize };
+    return { leg, side: 'BUY', aggressive: true, orderSize: closeOutSize };
+  }
+
+  /**
+   * Try to sell the leading leg to reduce exposure
+   * Returns a sell decision if conditions are met, null otherwise
+   */
+  private trySellLeadingLeg(
+    analysis: PositionAnalysis,
+    marketData: MarketData
+  ): TradeDecision | null {
+    // Check minimum imbalance requirement
+    if (analysis.sizeDiff < this.config.minImbalanceForSell) {
+      return null;
+    }
+
+    const leadingLeg = analysis.leadingLeg;
+    const leadingLegBid = leadingLeg === 'YES' ? marketData.yes.bestBid : marketData.no.bestBid;
+    const leadingLegFilledSize = leadingLeg === 'YES' ? analysis.yesFilledSize : analysis.noFilledSize;
+    const leadingLegAvg = leadingLeg === 'YES' ? analysis.yesFilledAvg : analysis.noFilledAvg;
+
+    // Check if price is above sell threshold
+    if (leadingLegBid < this.config.sellThreshold) {
+      return null;
+    }
+
+    // Check if we have position to sell
+    if (leadingLegFilledSize <= 0) {
+      return null;
+    }
+
+    // Check if selling would be profitable
+    if (leadingLegBid <= leadingLegAvg) {
+      console.log(`[Arb] CLOSE-OUT: Skipping ${leadingLeg} sell - bid ${leadingLegBid.toFixed(3)} <= entry ${leadingLegAvg.toFixed(3)}`);
+      return null;
+    }
+
+    // Calculate sell size (capped at imbalance and available position)
+    const sellSize = Math.min(
+      analysis.sizeDiff,
+      leadingLegFilledSize,
+      this.config.orderSize * this.config.closeOutOrderMultiplier
+    );
+
+    if (sellSize <= 0) {
+      return null;
+    }
+
+    return {
+      leg: leadingLeg,
+      side: 'SELL',
+      aggressive: true,
+      orderSize: sellSize,
+    };
   }
 
   /**
@@ -149,7 +213,7 @@ export class DecisionEngine {
     }
 
     this.state.recordOrder(botId, leg);
-    return { leg, aggressive: analysis.isLargeImbalance, orderSize: this.config.orderSize };
+    return { leg, side: 'BUY', aggressive: analysis.isLargeImbalance, orderSize: this.config.orderSize };
   }
 
   /**
@@ -209,7 +273,7 @@ export class DecisionEngine {
     }
 
     this.state.recordOrder(botId, leg);
-    return { leg, aggressive: false, orderSize: this.config.orderSize };
+    return { leg, side: 'BUY', aggressive: false, orderSize: this.config.orderSize };
   }
 
   /**

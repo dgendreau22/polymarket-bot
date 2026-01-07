@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { BotList } from "@/components/bots/BotList";
-import type { BotInstance } from "@/lib/bots/types";
+import type { BotInstance, StrategyDefinition } from "@/lib/bots/types";
 import type {
   OrchestratorState,
   OrchestratorStatus,
@@ -38,9 +38,11 @@ export default function OrchestratorPage() {
   const [deleteAllLoading, setDeleteAllLoading] = useState(false);
 
   // Configuration form state
+  const [strategies, setStrategies] = useState<StrategyDefinition[]>([]);
   const [strategy, setStrategy] = useState("arbitrage");
   const [mode, setMode] = useState<"live" | "dry_run">("dry_run");
   const [leadTimeMinutes, setLeadTimeMinutes] = useState(5);
+  const [strategyConfig, setStrategyConfig] = useState<Record<string, unknown>>({});
 
   // Fetch initial status
   const fetchStatus = useCallback(async () => {
@@ -54,6 +56,9 @@ export default function OrchestratorPage() {
           setStrategy(data.data.config.strategy);
           setMode(data.data.config.mode);
           setLeadTimeMinutes(data.data.config.leadTimeMinutes);
+          if (data.data.config.strategyConfig) {
+            setStrategyConfig(data.data.config.strategyConfig);
+          }
         }
       } else {
         setError(data.error);
@@ -80,6 +85,19 @@ export default function OrchestratorPage() {
     }
   }, []);
 
+  // Fetch available strategies
+  const fetchStrategies = useCallback(async () => {
+    try {
+      const res = await fetch("/api/strategies");
+      const data = await res.json();
+      if (data.success) {
+        setStrategies(data.data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch strategies:", err);
+    }
+  }, []);
+
   // Start orchestrator
   const handleStart = async () => {
     setActionLoading(true);
@@ -92,6 +110,7 @@ export default function OrchestratorPage() {
           strategy,
           mode,
           leadTimeMinutes,
+          strategyConfig,
         }),
       });
       const data = await res.json();
@@ -203,8 +222,27 @@ export default function OrchestratorPage() {
   // Initial data fetch
   useEffect(() => {
     setLoading(true);
-    Promise.all([fetchStatus(), fetchBots()]).finally(() => setLoading(false));
-  }, [fetchStatus, fetchBots]);
+    Promise.all([fetchStatus(), fetchBots(), fetchStrategies()]).finally(() => setLoading(false));
+  }, [fetchStatus, fetchBots, fetchStrategies]);
+
+  // Get the currently selected strategy
+  const selectedStrategy = strategies.find((s) => s.slug === strategy);
+
+  // Initialize strategyConfig with defaults when strategy changes
+  useEffect(() => {
+    if (selectedStrategy?.parameters) {
+      const defaults: Record<string, unknown> = {};
+      selectedStrategy.parameters.forEach((param) => {
+        defaults[param.name] = param.default;
+      });
+      setStrategyConfig(defaults);
+    }
+  }, [selectedStrategy]);
+
+  // Update a single parameter value
+  const updateParam = (name: string, value: unknown) => {
+    setStrategyConfig((prev) => ({ ...prev, [name]: value }));
+  };
 
   // Countdown timer for scheduled state
   useEffect(() => {
@@ -328,9 +366,11 @@ export default function OrchestratorPage() {
                 className="w-full p-2 border rounded bg-background text-foreground"
                 disabled={isRunning}
               >
-                <option value="arbitrage">Arbitrage</option>
-                <option value="market-maker">Market Maker</option>
-                <option value="test-oscillator">Test Oscillator</option>
+                {strategies.map((s) => (
+                  <option key={s.slug} value={s.slug}>
+                    {s.name}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -370,6 +410,63 @@ export default function OrchestratorPage() {
               />
             </div>
           </div>
+
+          {/* Strategy Parameters */}
+          {selectedStrategy?.parameters && selectedStrategy.parameters.length > 0 && (
+            <div className="mt-4 pt-4 border-t">
+              <h3 className="text-sm font-medium mb-3">Strategy Parameters</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {selectedStrategy.parameters.map((param) => (
+                  <div key={param.name}>
+                    <label className="text-sm text-muted-foreground block mb-1">
+                      {param.name}
+                      {param.min !== undefined && param.max !== undefined && (
+                        <span className="text-xs ml-1">
+                          ({param.min} - {param.max})
+                        </span>
+                      )}
+                    </label>
+                    {param.type === "boolean" ? (
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(strategyConfig[param.name])}
+                          onChange={(e) => updateParam(param.name, e.target.checked)}
+                          disabled={isRunning}
+                        />
+                        <span className="text-sm text-muted-foreground">
+                          {param.description}
+                        </span>
+                      </label>
+                    ) : (
+                      <input
+                        type={param.type === "number" ? "number" : "text"}
+                        value={String(strategyConfig[param.name] ?? param.default)}
+                        onChange={(e) => {
+                          if (param.type === "number") {
+                            const val = parseFloat(e.target.value);
+                            updateParam(param.name, isNaN(val) ? 0 : val);
+                          } else {
+                            updateParam(param.name, e.target.value);
+                          }
+                        }}
+                        min={param.min}
+                        max={param.max}
+                        step={param.type === "number" ? 0.001 : undefined}
+                        className="w-full p-2 border rounded bg-background text-foreground"
+                        disabled={isRunning}
+                      />
+                    )}
+                    {param.type !== "boolean" && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {param.description}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Start/Stop Button */}
           <div className="mt-6 flex justify-end">

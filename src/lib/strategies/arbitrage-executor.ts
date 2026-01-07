@@ -23,7 +23,9 @@ import {
   PriceValidator,
   DecisionEngine,
   createBuySignal,
+  createSellSignal,
   type MarketData,
+  type PositionAnalysis,
 } from './arbitrage/index';
 
 /**
@@ -184,6 +186,18 @@ export class ArbitrageExecutor implements IStrategyExecutor {
     // 7. Create signal
     const tick = tickSize ? parseFloat(tickSize.tick_size) : 0.01;
     const prices = decision.leg === 'YES' ? marketData.yes : marketData.no;
+
+    // Handle SELL vs BUY signals
+    if (decision.side === 'SELL') {
+      const entryAvg = decision.leg === 'YES' ? analysis.yesFilledAvg : analysis.noFilledAvg;
+      return createSellSignal(
+        decision.leg,
+        prices.bestBid,
+        decision.orderSize,
+        tick,
+        entryAvg
+      );
+    }
 
     return createBuySignal(
       decision.leg,

@@ -34,6 +34,15 @@ In a perfect market, YES price + NO price = $1.00. When this sum is less than $1
 |------|------|---------|-----|-----|-------------|
 | orderSize | number | 10 | 1 | 1000 | Size per order (shares) |
 | maxPosition | number | 100 | 10 | 10000 | Max allowed difference between leg sizes (imbalance limit) |
+| profitThreshold | number | 0.98 | 0.90 | 0.99 | Combined avg cost must stay below this |
+| maxSingleLegPrice | number | 0.75 | 0.50 | 0.90 | Max price for entering a leg without the other leg |
+| imbalanceThreshold | number | 0.50 | 0.20 | 0.80 | Imbalance ratio to trigger aggressive mode |
+| closeOutThreshold | number | 0.90 | 0.50 | 0.95 | Time progress (0-1) to activate close-out mode |
+| normalCooldownMs | number | 3000 | 500 | 10000 | Cooldown between orders per leg (ms) |
+| closeOutCooldownMs | number | 500 | 100 | 2000 | Faster cooldown in close-out mode (ms) |
+| closeOutOrderMultiplier | number | 3 | 1 | 10 | Order size multiplier in close-out mode |
+| sellThreshold | number | 0.75 | 0.60 | 0.95 | Price above which to sell leading leg in close-out |
+| minImbalanceForSell | number | 30 | 10 | 100 | Minimum imbalance required before selling is allowed |
 
 ## Risk Management
 
