@@ -581,7 +581,8 @@ export default function BotDetailPage() {
       ws.removeOrderBookCallback(assetId, orderBookCallback);
       ws.removeTradeCallback(assetId, tradeCallback);
     };
-  }, [bot?.config.assetId, fetchOrderBook, fetchLastTradePrice, inferTickSize]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bot?.config.assetId]);
 
   // NO side data subscription (for arbitrage bots)
   useEffect(() => {
@@ -638,7 +639,8 @@ export default function BotDetailPage() {
       ws.removeOrderBookCallback(noAssetId, noOrderBookCallback);
       ws.removeTradeCallback(noAssetId, noTradeCallback);
     };
-  }, [bot?.config.noAssetId, bot?.config.strategySlug, fetchNoOrderBook, fetchNoLastTradePrice]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bot?.config.noAssetId, bot?.config.strategySlug]);
 
   if (loading) {
     return (
