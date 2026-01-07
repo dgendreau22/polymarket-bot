@@ -60,10 +60,15 @@ export class DecisionEngine {
 
     // PRIORITY 0: Sell leading leg (when imbalanced, for profit-taking)
     if (analysis.sizeDiff >= this.config.minImbalanceForSell) {
-      const sellDecision = this.trySellLeadingLeg(analysis, marketData);
-      if (sellDecision) {
-        console.log(`[Arb] PROFIT-TAKE: Selling ${sellDecision.orderSize.toFixed(0)} ${sellDecision.leg} to reduce exposure`);
-        return sellDecision;
+      const leadingLeg = analysis.leadingLeg;
+      // Check cooldown for the leg we'd sell
+      if (!this.state.isOnCooldown(botId, leadingLeg, cooldownMs)) {
+        const sellDecision = this.trySellLeadingLeg(analysis, marketData);
+        if (sellDecision) {
+          this.state.recordOrder(botId, sellDecision.leg);  // Record for cooldown
+          console.log(`[Arb] REBALANCE: Selling ${sellDecision.orderSize.toFixed(0)} ${sellDecision.leg} to reduce imbalance`);
+          return sellDecision;
+        }
       }
     }
 
