@@ -19,6 +19,7 @@
     "date-fns": "^4.1.0",
     "decimal.js": "^10.6.0",
     "gray-matter": "^4.0.3",
+    "lightweight-charts": "^5.1.0",
     "lucide-react": "^0.561.0",
     "next": "16.0.10",
     "react": "19.2.1",

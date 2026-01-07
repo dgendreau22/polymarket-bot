@@ -13,7 +13,13 @@ import {
   RefreshCw,
   ArrowLeft,
   Trash2,
+  Info,
 } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { BotList } from "@/components/bots/BotList";
 import type { BotInstance, StrategyDefinition } from "@/lib/bots/types";
@@ -418,13 +424,21 @@ export default function OrchestratorPage() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {selectedStrategy.parameters.map((param) => (
                   <div key={param.name}>
-                    <label className="text-sm text-muted-foreground block mb-1">
-                      {param.name}
+                    <label className="text-sm text-muted-foreground mb-1 flex items-center gap-1">
+                      <span>{param.name}</span>
                       {param.min !== undefined && param.max !== undefined && (
-                        <span className="text-xs ml-1">
+                        <span className="text-xs">
                           ({param.min} - {param.max})
                         </span>
                       )}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help flex-shrink-0" />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="max-w-xs">{param.description}</p>
+                        </TooltipContent>
+                      </Tooltip>
                     </label>
                     {param.type === "boolean" ? (
                       <label className="flex items-center gap-2">
@@ -435,7 +449,7 @@ export default function OrchestratorPage() {
                           disabled={isRunning}
                         />
                         <span className="text-sm text-muted-foreground">
-                          {param.description}
+                          Enabled
                         </span>
                       </label>
                     ) : (
@@ -456,11 +470,6 @@ export default function OrchestratorPage() {
                         className="w-full p-2 border rounded bg-background text-foreground"
                         disabled={isRunning}
                       />
-                    )}
-                    {param.type !== "boolean" && (
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {param.description}
-                      </p>
                     )}
                   </div>
                 ))}
