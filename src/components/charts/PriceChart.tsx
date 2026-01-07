@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import {
   createChart,
   IChartApi,
@@ -32,13 +32,14 @@ export function PriceChart({
 }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const seriesRef = useRef<ISeriesApi<any> | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const pnlSeriesRef = useRef<ISeriesApi<any> | null>(null);
+  // Note: lightweight-charts v5 uses complex generic types that don't work well with refs.
+  // Using ReturnType to infer the correct series type from addSeries.
+  const seriesRef = useRef<ReturnType<IChartApi["addSeries"]> | null>(null);
+  const pnlSeriesRef = useRef<ReturnType<IChartApi["addSeries"]> | null>(null);
   const candlesRef = useRef<CandlestickData[]>([]);
   const pnlDataRef = useRef<LineData[]>([]);
   const currentCandleTimeRef = useRef<number | null>(null);
+  const [chartError, setChartError] = useState<string | null>(null);
 
   // Get candle time bucket from timestamp
   const getCandleTime = useCallback(
@@ -56,160 +57,172 @@ export function PriceChart({
   useEffect(() => {
     if (!containerRef.current) return;
 
-    const isDark = document.documentElement.classList.contains("dark");
+    try {
+      const isDark = document.documentElement.classList.contains("dark");
 
-    const chart = createChart(containerRef.current, {
-      height,
-      layout: {
-        background: { type: ColorType.Solid, color: "transparent" },
-        textColor: isDark ? "#888" : "#666",
-      },
-      grid: {
-        vertLines: { color: isDark ? "#222" : "#eee" },
-        horzLines: { color: isDark ? "#222" : "#eee" },
-      },
-      rightPriceScale: {
-        borderVisible: false,
-      },
-      leftPriceScale: {
-        visible: true,
-        borderVisible: false,
-      },
-      timeScale: {
-        borderVisible: false,
-        timeVisible: true,
-        secondsVisible: true,
-      },
-      crosshair: {
-        horzLine: {
-          visible: true,
-          labelVisible: true,
+      const chart = createChart(containerRef.current, {
+        height,
+        layout: {
+          background: { type: ColorType.Solid, color: "transparent" },
+          textColor: isDark ? "#888" : "#666",
         },
-        vertLine: {
-          visible: true,
-          labelVisible: true,
+        grid: {
+          vertLines: { color: isDark ? "#222" : "#eee" },
+          horzLines: { color: isDark ? "#222" : "#eee" },
         },
-      },
-    });
+        rightPriceScale: {
+          borderVisible: false,
+        },
+        leftPriceScale: {
+          visible: true,
+          borderVisible: false,
+        },
+        timeScale: {
+          borderVisible: false,
+          timeVisible: true,
+          secondsVisible: true,
+        },
+        crosshair: {
+          horzLine: {
+            visible: true,
+            labelVisible: true,
+          },
+          vertLine: {
+            visible: true,
+            labelVisible: true,
+          },
+        },
+      });
 
-    const series = chart.addSeries(CandlestickSeries, {
-      upColor: "#22c55e",
-      downColor: "#ef4444",
-      borderUpColor: "#22c55e",
-      borderDownColor: "#ef4444",
-      wickUpColor: "#22c55e",
-      wickDownColor: "#ef4444",
-    });
+      const series = chart.addSeries(CandlestickSeries, {
+        upColor: "#22c55e",
+        downColor: "#ef4444",
+        borderUpColor: "#22c55e",
+        borderDownColor: "#ef4444",
+        wickUpColor: "#22c55e",
+        wickDownColor: "#ef4444",
+      });
 
-    // Add PnL line series on left scale
-    const pnlSeries = chart.addSeries(LineSeries, {
-      color: "#3b82f6", // blue
-      lineWidth: 2,
-      priceScaleId: "left",
-      lastValueVisible: true,
-      priceLineVisible: false,
-    });
+      // Add PnL line series on left scale
+      const pnlSeries = chart.addSeries(LineSeries, {
+        color: "#3b82f6", // blue
+        lineWidth: 2,
+        priceScaleId: "left",
+        lastValueVisible: true,
+        priceLineVisible: false,
+      });
 
-    chartRef.current = chart;
-    seriesRef.current = series;
-    pnlSeriesRef.current = pnlSeries;
+      chartRef.current = chart;
+      seriesRef.current = series;
+      pnlSeriesRef.current = pnlSeries;
 
-    // Handle resize
-    const handleResize = () => {
-      if (containerRef.current && chartRef.current) {
-        chartRef.current.applyOptions({
-          width: containerRef.current.clientWidth,
-        });
-      }
-    };
+      // Clear any previous error
+      setChartError(null);
 
-    window.addEventListener("resize", handleResize);
-    handleResize();
+      // Reset data refs when chart reinitializes
+      candlesRef.current = [];
+      pnlDataRef.current = [];
+      currentCandleTimeRef.current = null;
 
-    return () => {
-      window.removeEventListener("resize", handleResize);
-      chart.remove();
-      chartRef.current = null;
-      seriesRef.current = null;
-      pnlSeriesRef.current = null;
-    };
-  }, [height]);
+      // Handle resize
+      const handleResize = () => {
+        if (containerRef.current && chartRef.current) {
+          chartRef.current.applyOptions({
+            width: containerRef.current.clientWidth,
+          });
+        }
+      };
 
-  // Update candles when price changes
+      window.addEventListener("resize", handleResize);
+      handleResize();
+
+      return () => {
+        window.removeEventListener("resize", handleResize);
+        chart.remove();
+        chartRef.current = null;
+        seriesRef.current = null;
+        pnlSeriesRef.current = null;
+      };
+    } catch (error) {
+      console.error("Failed to initialize chart:", error);
+      setChartError("Failed to load chart");
+      return;
+    }
+  }, [height, intervalSeconds]);
+
+  // Update both price candles and PnL series together for synchronization
   useEffect(() => {
-    if (!price || !timestamp || !seriesRef.current) return;
+    if (!timestamp || !seriesRef.current) return;
 
     const candleTime = getCandleTime(timestamp);
     if (candleTime === null) return; // Invalid timestamp
 
-    const candles = candlesRef.current;
+    // Update price candles (only if price is provided and valid)
+    if (price !== null && price !== undefined) {
+      const candles = candlesRef.current;
 
-    if (currentCandleTimeRef.current === candleTime) {
-      // Update existing candle
-      const lastCandle = candles[candles.length - 1];
-      if (lastCandle) {
-        lastCandle.high = Math.max(lastCandle.high, price);
-        lastCandle.low = Math.min(lastCandle.low, price);
-        lastCandle.close = price;
-        seriesRef.current.update(lastCandle);
+      if (currentCandleTimeRef.current === candleTime) {
+        // Update existing candle
+        const lastCandle = candles[candles.length - 1];
+        if (lastCandle) {
+          lastCandle.high = Math.max(lastCandle.high, price);
+          lastCandle.low = Math.min(lastCandle.low, price);
+          lastCandle.close = price;
+          seriesRef.current.update(lastCandle);
+        }
+      } else {
+        // Create new candle
+        const newCandle: CandlestickData = {
+          time: candleTime as Time,
+          open: price,
+          high: price,
+          low: price,
+          close: price,
+        };
+
+        candles.push(newCandle);
+        currentCandleTimeRef.current = candleTime;
+
+        // Trim to max candles
+        if (candles.length > MAX_CANDLES) {
+          candles.shift();
+        }
+
+        seriesRef.current.setData(candles);
+
+        // Auto-scroll to latest
+        chartRef.current?.timeScale().scrollToRealTime();
       }
-    } else {
-      // Create new candle
-      const newCandle: CandlestickData = {
-        time: candleTime as Time,
-        open: price,
-        high: price,
-        low: price,
-        close: price,
-      };
-
-      candles.push(newCandle);
-      currentCandleTimeRef.current = candleTime;
-
-      // Trim to max candles
-      if (candles.length > MAX_CANDLES) {
-        candles.shift();
-      }
-
-      seriesRef.current.setData(candles);
-
-      // Auto-scroll to latest
-      chartRef.current?.timeScale().scrollToRealTime();
     }
-  }, [price, timestamp, getCandleTime]);
 
-  // Update PnL series when pnl changes
-  useEffect(() => {
-    if (pnl === null || pnl === undefined || !timestamp || !pnlSeriesRef.current) return;
+    // Update PnL series (only if pnl is provided and valid)
+    if (pnl !== null && pnl !== undefined && pnlSeriesRef.current) {
+      const pnlData = pnlDataRef.current;
 
-    const candleTime = getCandleTime(timestamp);
-    if (candleTime === null) return; // Invalid timestamp
+      // Check if we already have a point at this time
+      const lastPoint = pnlData[pnlData.length - 1];
+      if (lastPoint && lastPoint.time === candleTime) {
+        // Update existing point
+        lastPoint.value = pnl;
+        pnlSeriesRef.current.update(lastPoint);
+      } else {
+        // Add new point
+        const newPoint: LineData = {
+          time: candleTime as Time,
+          value: pnl,
+        };
 
-    const pnlData = pnlDataRef.current;
+        pnlData.push(newPoint);
 
-    // Check if we already have a point at this time
-    const lastPoint = pnlData[pnlData.length - 1];
-    if (lastPoint && lastPoint.time === candleTime) {
-      // Update existing point
-      lastPoint.value = pnl;
-      pnlSeriesRef.current.update(lastPoint);
-    } else {
-      // Add new point
-      const newPoint: LineData = {
-        time: candleTime as Time,
-        value: pnl,
-      };
+        // Trim to max points
+        if (pnlData.length > MAX_CANDLES) {
+          pnlData.shift();
+        }
 
-      pnlData.push(newPoint);
-
-      // Trim to max points
-      if (pnlData.length > MAX_CANDLES) {
-        pnlData.shift();
+        pnlSeriesRef.current.setData(pnlData);
       }
-
-      pnlSeriesRef.current.setData(pnlData);
     }
-  }, [pnl, timestamp, getCandleTime]);
+  }, [price, pnl, timestamp, getCandleTime]);
 
   // Update theme when it changes
   useEffect(() => {
@@ -235,6 +248,17 @@ export function PriceChart({
 
     return () => observer.disconnect();
   }, []);
+
+  if (chartError) {
+    return (
+      <div
+        className="w-full flex items-center justify-center text-muted-foreground text-sm"
+        style={{ height }}
+      >
+        {chartError}
+      </div>
+    );
+  }
 
   return (
     <div
