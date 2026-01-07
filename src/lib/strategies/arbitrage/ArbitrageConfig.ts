@@ -19,14 +19,11 @@ export interface ArbitrageConfig {
 
   // Imbalance settings
   imbalanceThreshold: number;     // Ratio to trigger aggressive mode (default: 0.50)
-  closeOutThreshold: number;      // Time progress to activate close-out (default: 0.90)
 
   // Cooldown settings (ms)
-  normalCooldownMs: number;       // Normal cooldown per leg (default: 3000)
-  closeOutCooldownMs: number;     // Faster cooldown in close-out mode (default: 500)
-  closeOutOrderMultiplier: number; // Order size multiplier in close-out (default: 3)
+  cooldownMs: number;             // Cooldown per leg (default: 3000)
 
-  // Position unwinding settings (for selling leading leg in close-out mode)
+  // Profit-taking settings (for selling leading leg when imbalanced)
   sellThreshold: number;          // Price threshold above which to sell leading leg (default: 0.75)
   minImbalanceForSell: number;    // Minimum imbalance required before selling is allowed (default: 30)
 }
@@ -40,10 +37,7 @@ export const DEFAULT_ARBITRAGE_CONFIG: ArbitrageConfig = {
   profitThreshold: 0.98,
   maxSingleLegPrice: 0.75,
   imbalanceThreshold: 0.50,
-  closeOutThreshold: 0.90,
-  normalCooldownMs: 3000,
-  closeOutCooldownMs: 500,
-  closeOutOrderMultiplier: 3,
+  cooldownMs: 3000,
   sellThreshold: 0.75,
   minImbalanceForSell: 30,
 };
@@ -68,14 +62,11 @@ export function parseConfig(strategyConfig: Record<string, unknown>): ArbitrageC
 
     // Imbalance settings
     imbalanceThreshold: getNumber('imbalanceThreshold', DEFAULT_ARBITRAGE_CONFIG.imbalanceThreshold),
-    closeOutThreshold: getNumber('closeOutThreshold', DEFAULT_ARBITRAGE_CONFIG.closeOutThreshold),
 
     // Cooldown settings
-    normalCooldownMs: getNumber('normalCooldownMs', DEFAULT_ARBITRAGE_CONFIG.normalCooldownMs),
-    closeOutCooldownMs: getNumber('closeOutCooldownMs', DEFAULT_ARBITRAGE_CONFIG.closeOutCooldownMs),
-    closeOutOrderMultiplier: getNumber('closeOutOrderMultiplier', DEFAULT_ARBITRAGE_CONFIG.closeOutOrderMultiplier),
+    cooldownMs: getNumber('cooldownMs', DEFAULT_ARBITRAGE_CONFIG.cooldownMs),
 
-    // Position unwinding settings
+    // Profit-taking settings
     sellThreshold: getNumber('sellThreshold', DEFAULT_ARBITRAGE_CONFIG.sellThreshold),
     minImbalanceForSell: getNumber('minImbalanceForSell', DEFAULT_ARBITRAGE_CONFIG.minImbalanceForSell),
   };

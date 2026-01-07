@@ -2,7 +2,7 @@
  * Decision Engine
  *
  * Implements the priority-based decision logic for the arbitrage strategy:
- * - Priority 0: Close-out mode (force hedge in last 10% of time)
+ * - Priority 0: Sell leading leg (when imbalanced, for profit-taking)
  * - Priority 1: Balance lagging leg (when one leg has position)
  * - Priority 2: Round-robin entry (alternate YES/NO for balanced accumulation)
  */
@@ -49,97 +49,46 @@ export class DecisionEngine {
     botId: string,
     analysis: PositionAnalysis,
     marketData: MarketData,
-    timeProgress: number,
-    scaledMaxPosition: number
+    maxPosition: number
   ): TradeDecision | null {
-    const isCloseOutMode = timeProgress >= this.config.closeOutThreshold;
-    const effectiveCooldown = isCloseOutMode
-      ? this.config.closeOutCooldownMs
-      : this.config.normalCooldownMs;
+    const cooldownMs = this.config.cooldownMs;
 
     // Check if both legs on cooldown (skip cycle)
-    if (this.state.areBothOnCooldown(botId, effectiveCooldown) && !isCloseOutMode) {
+    if (this.state.areBothOnCooldown(botId, cooldownMs)) {
       return null;
     }
 
-    // PRIORITY 0: Close-out mode
-    if (isCloseOutMode && analysis.sizeDiff > 0) {
-      const decision = this.tryCloseOutDecision(botId, analysis, marketData, effectiveCooldown);
-      if (decision) return decision;
+    // PRIORITY 0: Sell leading leg (when imbalanced, for profit-taking)
+    if (analysis.sizeDiff >= this.config.minImbalanceForSell) {
+      const sellDecision = this.trySellLeadingLeg(analysis, marketData);
+      if (sellDecision) {
+        console.log(`[Arb] PROFIT-TAKE: Selling ${sellDecision.orderSize.toFixed(0)} ${sellDecision.leg} to reduce exposure`);
+        return sellDecision;
+      }
     }
 
     // PRIORITY 1: Balance lagging leg
     if (analysis.totalSize > 0) {
       const decision = this.tryBalanceDecision(
-        botId, analysis, marketData, scaledMaxPosition, effectiveCooldown, isCloseOutMode
+        botId, analysis, marketData, maxPosition, cooldownMs
       );
       if (decision) return decision;
     }
 
     // PRIORITY 2: Round-robin entry
     return this.tryEntryDecision(
-      botId, analysis, marketData, scaledMaxPosition, effectiveCooldown, isCloseOutMode
+      botId, analysis, marketData, maxPosition, cooldownMs
     );
   }
 
   /**
-   * Priority 0: Force hedge the lagging leg in close-out mode
-   * First tries to SELL the leading leg if price is high enough,
-   * then falls back to buying the lagging leg.
-   */
-  private tryCloseOutDecision(
-    botId: string,
-    analysis: PositionAnalysis,
-    marketData: MarketData,
-    cooldownMs: number
-  ): TradeDecision | null {
-    // First, try to SELL leading leg if price is high enough
-    const sellDecision = this.trySellLeadingLeg(analysis, marketData);
-    if (sellDecision) {
-      console.log(`[Arb] CLOSE-OUT: Selling ${sellDecision.orderSize.toFixed(0)} ${sellDecision.leg} to reduce exposure`);
-      return sellDecision;
-    }
-
-    // Fall back to buying lagging leg
-    const leg = analysis.laggingLeg;
-
-    if (!this.canBuyLeg(botId, leg, analysis, true, cooldownMs, 0)) {
-      return null;
-    }
-
-    // Use multiplied order size (capped at remaining imbalance)
-    const closeOutSize = Math.min(
-      analysis.sizeDiff,
-      this.config.orderSize * this.config.closeOutOrderMultiplier
-    );
-    const closeOutPrice = leg === 'YES' ? marketData.yes.bestAsk : marketData.no.bestAsk;
-    const otherAvg = leg === 'YES' ? analysis.noAvg : analysis.yesAvg;
-
-    // Check price ceiling even in close-out mode
-    if (!this.validator.isLegPriceAcceptable(leg, closeOutPrice, otherAvg)) {
-      console.log(`[Arb] CLOSE-OUT: Skipping ${leg} buy - price ${closeOutPrice.toFixed(3)} too high`);
-      return null;
-    }
-
-    console.log(`[Arb] CLOSE-OUT: Buying ${closeOutSize.toFixed(0)} ${leg} to hedge (imbalance=${analysis.sizeDiff.toFixed(0)})`);
-
-    this.state.recordOrder(botId, leg);
-    return { leg, side: 'BUY', aggressive: true, orderSize: closeOutSize };
-  }
-
-  /**
-   * Try to sell the leading leg to reduce exposure
+   * Try to sell the leading leg to reduce exposure (profit-taking)
    * Returns a sell decision if conditions are met, null otherwise
    */
   private trySellLeadingLeg(
     analysis: PositionAnalysis,
     marketData: MarketData
   ): TradeDecision | null {
-    // Check minimum imbalance requirement
-    if (analysis.sizeDiff < this.config.minImbalanceForSell) {
-      return null;
-    }
-
     const leadingLeg = analysis.leadingLeg;
     const leadingLegBid = leadingLeg === 'YES' ? marketData.yes.bestBid : marketData.no.bestBid;
     const leadingLegFilledSize = leadingLeg === 'YES' ? analysis.yesFilledSize : analysis.noFilledSize;
@@ -157,15 +106,15 @@ export class DecisionEngine {
 
     // Check if selling would be profitable
     if (leadingLegBid <= leadingLegAvg) {
-      console.log(`[Arb] CLOSE-OUT: Skipping ${leadingLeg} sell - bid ${leadingLegBid.toFixed(3)} <= entry ${leadingLegAvg.toFixed(3)}`);
+      console.log(`[Arb] Skipping ${leadingLeg} sell - bid ${leadingLegBid.toFixed(3)} <= entry ${leadingLegAvg.toFixed(3)}`);
       return null;
     }
 
-    // Calculate sell size (capped at imbalance and available position)
+    // Calculate sell size (capped at imbalance, available position, and order size)
     const sellSize = Math.min(
       analysis.sizeDiff,
       leadingLegFilledSize,
-      this.config.orderSize * this.config.closeOutOrderMultiplier
+      this.config.orderSize
     );
 
     if (sellSize <= 0) {
@@ -187,13 +136,12 @@ export class DecisionEngine {
     botId: string,
     analysis: PositionAnalysis,
     marketData: MarketData,
-    scaledMaxPosition: number,
-    cooldownMs: number,
-    isCloseOutMode: boolean
+    maxPosition: number,
+    cooldownMs: number
   ): TradeDecision | null {
     const leg = analysis.laggingLeg;
 
-    if (!this.canBuyLeg(botId, leg, analysis, isCloseOutMode, cooldownMs, scaledMaxPosition)) {
+    if (!this.canBuyLeg(botId, leg, analysis, cooldownMs, maxPosition)) {
       return null;
     }
 
@@ -223,22 +171,21 @@ export class DecisionEngine {
     botId: string,
     analysis: PositionAnalysis,
     marketData: MarketData,
-    scaledMaxPosition: number,
-    cooldownMs: number,
-    isCloseOutMode: boolean
+    maxPosition: number,
+    cooldownMs: number
   ): TradeDecision | null {
     const firstLeg = this.state.getNextLegRoundRobin(botId);
     const secondLeg: 'YES' | 'NO' = firstLeg === 'YES' ? 'NO' : 'YES';
 
     // Try first leg (opposite of last bought)
     const firstDecision = this.tryLegEntry(
-      botId, firstLeg, analysis, marketData, scaledMaxPosition, cooldownMs, isCloseOutMode
+      botId, firstLeg, analysis, marketData, maxPosition, cooldownMs
     );
     if (firstDecision) return firstDecision;
 
     // Try second leg (fallback)
     return this.tryLegEntry(
-      botId, secondLeg, analysis, marketData, scaledMaxPosition, cooldownMs, isCloseOutMode
+      botId, secondLeg, analysis, marketData, maxPosition, cooldownMs
     );
   }
 
@@ -250,11 +197,10 @@ export class DecisionEngine {
     leg: 'YES' | 'NO',
     analysis: PositionAnalysis,
     marketData: MarketData,
-    scaledMaxPosition: number,
-    cooldownMs: number,
-    isCloseOutMode: boolean
+    maxPosition: number,
+    cooldownMs: number
   ): TradeDecision | null {
-    if (!this.canBuyLeg(botId, leg, analysis, isCloseOutMode, cooldownMs, scaledMaxPosition)) {
+    if (!this.canBuyLeg(botId, leg, analysis, cooldownMs, maxPosition)) {
       return null;
     }
 
@@ -283,21 +229,19 @@ export class DecisionEngine {
     botId: string,
     leg: 'YES' | 'NO',
     analysis: PositionAnalysis,
-    isCloseOutMode: boolean,
     cooldownMs: number,
-    scaledMaxPosition: number
+    maxPosition: number
   ): boolean {
     const isLagging = leg === analysis.laggingLeg;
 
-    // Check cooldown (bypass for lagging leg in close-out mode)
-    const onCooldown = this.state.isOnCooldown(botId, leg, cooldownMs);
-    if (onCooldown && !(isCloseOutMode && isLagging)) {
+    // Check cooldown
+    if (this.state.isOnCooldown(botId, leg, cooldownMs)) {
       return false;
     }
 
     // Position limit check
     // Lagging leg can always buy (reduces imbalance)
-    // Leading leg blocked if it would increase diff beyond scaledMaxPosition
+    // Leading leg blocked if it would increase diff beyond maxPosition
     if (isLagging) {
       return true;
     }
@@ -306,7 +250,7 @@ export class DecisionEngine {
     const newDiff = leg === 'YES' ? analysis.newDiffIfBuyYes : analysis.newDiffIfBuyNo;
     const newFilledDiff = leg === 'YES' ? analysis.newFilledDiffIfBuyYes : analysis.newFilledDiffIfBuyNo;
 
-    if (newDiff > scaledMaxPosition || newFilledDiff > scaledMaxPosition) {
+    if (newDiff > maxPosition || newFilledDiff > maxPosition) {
       return false;
     }
 

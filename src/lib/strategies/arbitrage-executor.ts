@@ -10,8 +10,7 @@
  * 3. Projected cost check (wouldCostBeValid): Ensure avg cost sum < $1 AFTER new order would fill
  * 4. Adaptive orders: Passive (below bid) normally, aggressive (at ask) when imbalance > 50%
  * 5. Order throttling: Cooldown period per leg to prevent burst trading
- * 6. Time-based scaling: maxPosition decreases as market approaches close
- * 7. Close-out mode: In last 10% of time, force hedging on lagging leg
+ * 6. Profit-taking: Sell leading leg when imbalanced and price is favorable
  */
 
 import type { IStrategyExecutor, StrategyContext, StrategySignal, ExecutorMetadata } from '../bots/types';
@@ -72,40 +71,6 @@ function extractMarketData(
   };
 }
 
-/**
- * Calculate time progress and scaled max position
- */
-function calculateTimeScaling(
-  botStartTime: Date | undefined,
-  marketEndTime: Date | undefined,
-  maxPositionPerLeg: number
-): { timeProgress: number; scaledMaxPosition: number } {
-  let timeProgress = 0;
-  let scaledMaxPosition = maxPositionPerLeg;
-
-  if (botStartTime && marketEndTime) {
-    const now = Date.now();
-    const startTime = botStartTime.getTime();
-    const endTime = marketEndTime.getTime();
-    const totalDuration = endTime - startTime;
-
-    if (totalDuration > 0 && now >= startTime) {
-      const elapsed = now - startTime;
-      timeProgress = Math.min(1, Math.max(0, elapsed / totalDuration));
-      const timeRemaining = 1 - timeProgress;
-
-      scaledMaxPosition = Math.floor(maxPositionPerLeg * timeRemaining);
-
-      console.log(
-        `[Arb] Time: ${(timeProgress * 100).toFixed(1)}% elapsed, ` +
-        `maxPosition: ${maxPositionPerLeg} → ${scaledMaxPosition}`
-      );
-    }
-  }
-
-  return { timeProgress, scaledMaxPosition };
-}
-
 export class ArbitrageExecutor implements IStrategyExecutor {
   /** Executor metadata - declares dual-asset requirements */
   readonly metadata: ExecutorMetadata = {
@@ -160,36 +125,20 @@ export class ArbitrageExecutor implements IStrategyExecutor {
       return null;
     }
 
-    // 3. Calculate time progress and scaled max position
-    const { timeProgress, scaledMaxPosition } = calculateTimeScaling(
-      context.botStartTime,
-      context.marketEndTime,
-      config.maxPositionPerLeg
-    );
-
-    // 4. Log close-out mode if active
-    if (timeProgress >= config.closeOutThreshold) {
-      console.log(
-        `[Arb] CLOSE-OUT MODE: ${((1 - timeProgress) * 100).toFixed(1)}% time remaining, ` +
-        `forcing hedge on lagging leg`
-      );
-    }
-
-    // 5. Analyze positions
+    // 3. Analyze positions
     const analysis = analyzePositions(context, config.imbalanceThreshold, config.orderSize);
 
-    // 6. Make decision
+    // 4. Make decision
     const decision = decisionEngine.decide(
       bot.config.id,
       analysis,
       marketData,
-      timeProgress,
-      scaledMaxPosition
+      config.maxPositionPerLeg
     );
 
     if (!decision) return null;
 
-    // 7. Create signal
+    // 5. Create signal
     const tick = tickSize ? parseFloat(tickSize.tick_size) : 0.01;
     const prices = decision.leg === 'YES' ? marketData.yes : marketData.no;
 
