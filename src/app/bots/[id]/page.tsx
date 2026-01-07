@@ -4,6 +4,11 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Countdown } from "@/components/ui/countdown";
 import { BotStatusBadge, BotControls } from "@/components/bots";
 import { TradesTable } from "@/components/trades";
@@ -17,6 +22,7 @@ import {
   BarChart3,
   Activity,
   Package,
+  Info,
 } from "lucide-react";
 import { getWebSocket } from "@/lib/polymarket/websocket";
 import type { BotInstance, Trade, StrategyDefinition, LimitOrder, Position } from "@/lib/bots/types";
@@ -1566,18 +1572,26 @@ export default function BotDetailPage() {
                 <thead>
                   <tr className="border-b text-left text-muted-foreground">
                     <th className="pb-2 pr-4">Name</th>
-                    <th className="pb-2 pr-4">Value</th>
-                    <th className="pb-2">Description</th>
+                    <th className="pb-2">Value</th>
                   </tr>
                 </thead>
                 <tbody>
                   {strategy.parameters.map((param) => (
                     <tr key={param.name} className="border-b last:border-0">
                       <td className="py-2 pr-4 font-mono text-blue-500">{param.name}</td>
-                      <td className="py-2 pr-4 font-mono">
-                        {String(configuredParams[param.name] ?? param.default)}
+                      <td className="py-2">
+                        <div className="flex items-center gap-2 font-mono">
+                          <span>{String(configuredParams[param.name] ?? param.default)}</span>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Info className="w-4 h-4 text-muted-foreground cursor-help flex-shrink-0" />
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p className="max-w-xs">{param.description}</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </div>
                       </td>
-                      <td className="py-2 text-muted-foreground">{param.description}</td>
                     </tr>
                   ))}
                 </tbody>
