@@ -42,8 +42,11 @@ export function PriceChart({
 
   // Get candle time bucket from timestamp
   const getCandleTime = useCallback(
-    (ts: string): number => {
-      const epochSeconds = Math.floor(new Date(ts).getTime() / 1000);
+    (ts: string): number | null => {
+      const date = new Date(ts);
+      const epochMs = date.getTime();
+      if (isNaN(epochMs)) return null; // Invalid timestamp
+      const epochSeconds = Math.floor(epochMs / 1000);
       return Math.floor(epochSeconds / intervalSeconds) * intervalSeconds;
     },
     [intervalSeconds]
@@ -136,7 +139,9 @@ export function PriceChart({
   useEffect(() => {
     if (!price || !timestamp || !seriesRef.current) return;
 
-    const candleTime = getCandleTime(timestamp) as Time;
+    const candleTime = getCandleTime(timestamp);
+    if (candleTime === null) return; // Invalid timestamp
+
     const candles = candlesRef.current;
 
     if (currentCandleTimeRef.current === candleTime) {
@@ -151,7 +156,7 @@ export function PriceChart({
     } else {
       // Create new candle
       const newCandle: CandlestickData = {
-        time: candleTime,
+        time: candleTime as Time,
         open: price,
         high: price,
         low: price,
@@ -159,7 +164,7 @@ export function PriceChart({
       };
 
       candles.push(newCandle);
-      currentCandleTimeRef.current = candleTime as number;
+      currentCandleTimeRef.current = candleTime;
 
       // Trim to max candles
       if (candles.length > MAX_CANDLES) {
@@ -177,7 +182,9 @@ export function PriceChart({
   useEffect(() => {
     if (pnl === null || pnl === undefined || !timestamp || !pnlSeriesRef.current) return;
 
-    const candleTime = getCandleTime(timestamp) as Time;
+    const candleTime = getCandleTime(timestamp);
+    if (candleTime === null) return; // Invalid timestamp
+
     const pnlData = pnlDataRef.current;
 
     // Check if we already have a point at this time
@@ -189,7 +196,7 @@ export function PriceChart({
     } else {
       // Add new point
       const newPoint: LineData = {
-        time: candleTime,
+        time: candleTime as Time,
         value: pnl,
       };
 
