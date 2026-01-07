@@ -4,6 +4,12 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Countdown } from "@/components/ui/countdown";
 import { BotStatusBadge, BotControls } from "@/components/bots";
 import { TradesTable } from "@/components/trades";
@@ -17,6 +23,7 @@ import {
   BarChart3,
   Activity,
   Package,
+  Info,
 } from "lucide-react";
 import { getWebSocket } from "@/lib/polymarket/websocket";
 import type { BotInstance, Trade, StrategyDefinition, LimitOrder, Position } from "@/lib/bots/types";
@@ -1562,26 +1569,34 @@ export default function BotDetailPage() {
           <div className="bg-card border rounded-lg p-6 mb-6">
             <h2 className="font-semibold mb-3">Parameters</h2>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-muted-foreground">
-                    <th className="pb-2 pr-4">Name</th>
-                    <th className="pb-2 pr-4">Value</th>
-                    <th className="pb-2">Description</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {strategy.parameters.map((param) => (
-                    <tr key={param.name} className="border-b last:border-0">
-                      <td className="py-2 pr-4 font-mono text-blue-500">{param.name}</td>
-                      <td className="py-2 pr-4 font-mono">
-                        {String(configuredParams[param.name] ?? param.default)}
-                      </td>
-                      <td className="py-2 text-muted-foreground">{param.description}</td>
+              <TooltipProvider>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b text-left text-muted-foreground">
+                      <th className="pb-2 pr-4">Name</th>
+                      <th className="pb-2">Value</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {strategy.parameters.map((param) => (
+                      <tr key={param.name} className="border-b last:border-0">
+                        <td className="py-2 pr-4 font-mono text-blue-500">{param.name}</td>
+                        <td className="py-2 font-mono">
+                          {String(configuredParams[param.name] ?? param.default)}
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Info className="w-4 h-4 ml-2 inline-block text-muted-foreground cursor-help align-text-bottom" />
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p className="max-w-xs">{param.description}</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TooltipProvider>
             </div>
           </div>
         )}
