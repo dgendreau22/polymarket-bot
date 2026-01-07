@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Countdown } from "@/components/ui/countdown";
 import { BotStatusBadge, BotControls } from "@/components/bots";
 import { TradesTable } from "@/components/trades";
+const POLL_INTERVAL_MS = 3000;
+
 import {
   ArrowLeft,
   RefreshCw,
@@ -565,7 +567,7 @@ export default function BotDetailPage() {
     const pollInterval = setInterval(() => {
       fetchOrderBook(assetId);
       fetchLastTradePrice(assetId);
-    }, 3000);
+    }, POLL_INTERVAL_MS);
 
     return () => {
       clearInterval(pollInterval);
@@ -623,7 +625,7 @@ export default function BotDetailPage() {
     const pollInterval = setInterval(() => {
       fetchNoOrderBook(noAssetId);
       fetchNoLastTradePrice(noAssetId);
-    }, 3000);
+    }, POLL_INTERVAL_MS);
 
     return () => {
       clearInterval(pollInterval);

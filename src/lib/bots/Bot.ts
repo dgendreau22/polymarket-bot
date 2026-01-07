@@ -73,6 +73,7 @@ export class Bot {
   // Market status tracking (auto-stop when market closes)
   private lastMarketCheck: number = 0;
   private readonly MARKET_CHECK_INTERVAL_MS = 60000;
+  private readonly EXECUTION_INTERVAL_MS = 30000;
 
   constructor(config: Omit<BotConfig, 'id'> & { id?: string }) {
     this.config = {
@@ -233,7 +234,7 @@ export class Bot {
           this.emitEvent({ type: 'ERROR', error: error.message, timestamp: new Date() });
         }
       }
-    }, 30000);
+    }, this.EXECUTION_INTERVAL_MS);
 
     this.emitEvent({ type: 'STARTED', timestamp: new Date() });
     console.log(`[Bot ${this.id}] Started with ${assets.length} assets`);
@@ -334,6 +335,11 @@ export class Bot {
 
     console.log(`[Bot ${this.id}] Resuming...`);
 
+    // Clear any existing interval to prevent memory leak
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+    }
+
     this.intervalId = setInterval(() => {
       if (this.state === 'running') {
         this.executeCycle().catch(err => {
@@ -341,7 +347,7 @@ export class Bot {
           this.emitEvent({ type: 'ERROR', error: err.message, timestamp: new Date() });
         });
       }
-    }, 30000);
+    }, this.EXECUTION_INTERVAL_MS);
 
     this.state = 'running';
     this.updatedAt = new Date();

@@ -3,6 +3,11 @@
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 
+const MS_PER_SECOND = 1000;
+const MS_PER_MINUTE = 60 * MS_PER_SECOND;
+const MS_PER_HOUR = 60 * MS_PER_MINUTE;
+const WARNING_THRESHOLD_MS = 5 * MS_PER_MINUTE;
+
 interface CountdownProps {
   targetDate: Date;
   className?: string;
@@ -27,10 +32,10 @@ export function Countdown({ targetDate, className }: CountdownProps) {
         return { hours: 0, minutes: 0, seconds: 0, isExpired: true, isWarning: false };
       }
 
-      const hours = Math.floor(diff / (1000 * 60 * 60));
-      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-      const isWarning = diff < 5 * 60 * 1000; // Less than 5 minutes
+      const hours = Math.floor(diff / MS_PER_HOUR);
+      const minutes = Math.floor((diff % MS_PER_HOUR) / MS_PER_MINUTE);
+      const seconds = Math.floor((diff % MS_PER_MINUTE) / MS_PER_SECOND);
+      const isWarning = diff < WARNING_THRESHOLD_MS;
 
       return { hours, minutes, seconds, isExpired: false, isWarning };
     };
@@ -41,7 +46,7 @@ export function Countdown({ targetDate, className }: CountdownProps) {
     // Update every second
     const interval = setInterval(() => {
       setTimeLeft(calculateTimeLeft());
-    }, 1000);
+    }, MS_PER_SECOND);
 
     return () => clearInterval(interval);
   }, [targetDate]);

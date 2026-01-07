@@ -16,6 +16,12 @@
 
 import type { IStrategyExecutor, StrategyContext, StrategySignal, ExecutorMetadata } from '../bots/types';
 import type { OrderBook } from '../polymarket/types';
+
+// Strategy constants
+const TARGET_COMBINED_COST = 1.0;  // Target: YES + NO < $1.00
+const MAX_PRICE_DISTANCE = 0.20;   // 20% max distance for stale order detection
+const DEFAULT_FILLABILITY_THRESHOLD = 0.80;  // 80% fillability threshold
+
 import {
   parseConfig,
   ArbitrageState,
@@ -56,7 +62,7 @@ function extractMarketData(
   const noBestAsk = noPrices?.bestAsk ?? getBestAsk(noOrderBook) ?? 1;
 
   const isValid = yesBestBid > 0 && noBestBid > 0;
-  const potentialProfit = 1.0 - (yesBestAsk + noBestAsk);
+  const potentialProfit = TARGET_COMBINED_COST - (yesBestAsk + noBestAsk);
 
   return {
     yes: { bestBid: yesBestBid, bestAsk: yesBestAsk },
@@ -109,10 +115,10 @@ export class ArbitrageExecutor implements IStrategyExecutor {
     ],
     positionHandler: 'multi',
     staleOrderRules: {
-      maxPriceDistance: 0.20,
+      maxPriceDistance: MAX_PRICE_DISTANCE,
       perOutcome: true,
     },
-    fillabilityThreshold: 0.80,
+    fillabilityThreshold: DEFAULT_FILLABILITY_THRESHOLD,
   };
 
   // Shared state and decision engine
