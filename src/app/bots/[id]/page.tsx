@@ -919,8 +919,12 @@ export default function BotDetailPage() {
                           <td className={cn("py-2.5 pr-3 text-right font-mono", upUnrealizedPnl >= 0 ? "text-green-500" : "text-red-500")}>
                             {upSize > 0 && upCurrentPrice > 0 ? `${upUnrealizedPnl >= 0 ? "+" : ""}$${upUnrealizedPnl.toFixed(2)}` : "—"}
                           </td>
-                          <td className="py-2.5 pr-3 text-right font-mono text-muted-foreground">—</td>
-                          <td className="py-2.5 text-right font-mono text-muted-foreground">—</td>
+                          <td className={cn("py-2.5 pr-3 text-right font-mono", yesRealizedPnl >= 0 ? "text-green-500" : "text-red-500")}>
+                            {yesRealizedPnl !== 0 ? `${yesRealizedPnl >= 0 ? "+" : ""}$${yesRealizedPnl.toFixed(2)}` : "—"}
+                          </td>
+                          <td className={cn("py-2.5 text-right font-mono", (yesRealizedPnl + upUnrealizedPnl) >= 0 ? "text-green-500" : "text-red-500")}>
+                            {(upSize > 0 || yesRealizedPnl !== 0) ? `${(yesRealizedPnl + upUnrealizedPnl) >= 0 ? "+" : ""}$${(yesRealizedPnl + upUnrealizedPnl).toFixed(2)}` : "—"}
+                          </td>
                         </tr>
                         {/* NO Row */}
                         <tr className="border-b border-muted">
@@ -936,8 +940,12 @@ export default function BotDetailPage() {
                           <td className={cn("py-2.5 pr-3 text-right font-mono", downUnrealizedPnl >= 0 ? "text-green-500" : "text-red-500")}>
                             {downSize > 0 && downCurrentPrice > 0 ? `${downUnrealizedPnl >= 0 ? "+" : ""}$${downUnrealizedPnl.toFixed(2)}` : "—"}
                           </td>
-                          <td className="py-2.5 pr-3 text-right font-mono text-muted-foreground">—</td>
-                          <td className="py-2.5 text-right font-mono text-muted-foreground">—</td>
+                          <td className={cn("py-2.5 pr-3 text-right font-mono", noRealizedPnl >= 0 ? "text-green-500" : "text-red-500")}>
+                            {noRealizedPnl !== 0 ? `${noRealizedPnl >= 0 ? "+" : ""}$${noRealizedPnl.toFixed(2)}` : "—"}
+                          </td>
+                          <td className={cn("py-2.5 text-right font-mono", (noRealizedPnl + downUnrealizedPnl) >= 0 ? "text-green-500" : "text-red-500")}>
+                            {(downSize > 0 || noRealizedPnl !== 0) ? `${(noRealizedPnl + downUnrealizedPnl) >= 0 ? "+" : ""}$${(noRealizedPnl + downUnrealizedPnl).toFixed(2)}` : "—"}
+                          </td>
                         </tr>
                         {/* Total Row */}
                         <tr className="bg-muted/30 font-medium">
@@ -946,7 +954,9 @@ export default function BotDetailPage() {
                           <td className="py-2.5 pr-3 text-right font-mono">
                             {(upAvg > 0 || downAvg > 0) ? formatPrice(combinedEntry) : "—"}
                           </td>
-                          <td className="py-2.5 pr-3 text-right font-mono text-muted-foreground">—</td>
+                          <td className="py-2.5 pr-3 text-right font-mono">
+                            {(upCurrentPrice > 0 || downCurrentPrice > 0) ? formatPrice(upCurrentPrice + downCurrentPrice) : "—"}
+                          </td>
                           <td className={cn("py-2.5 pr-3 text-right font-mono", totalUnrealized >= 0 ? "text-green-500" : "text-red-500")}>
                             {upCurrentPrice > 0 || downCurrentPrice > 0 ? `${totalUnrealized >= 0 ? "+" : ""}$${totalUnrealized.toFixed(2)}` : "—"}
                           </td>
@@ -1045,13 +1055,12 @@ export default function BotDetailPage() {
           {/* Price Chart */}
           <div className="bg-card border rounded-lg p-6 flex flex-col">
             <h2 className="font-semibold mb-3">Price (15s)</h2>
-            <div className="flex-1 min-h-[200px]">
+            <div className="flex-1 min-h-0 h-full" id="price-chart-container">
               <PriceChart
                 price={lastTrade ? parseFloat(lastTrade.price) : null}
                 timestamp={lastTrade?.timestamp ?? null}
                 pnl={pnl}
                 intervalSeconds={15}
-                height={220}
               />
             </div>
           </div>

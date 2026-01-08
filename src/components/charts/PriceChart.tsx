@@ -17,7 +17,6 @@ interface PriceChartProps {
   timestamp: string | null;
   pnl?: number | null;
   intervalSeconds?: number;
-  height?: number;
 }
 
 const MAX_CANDLES = 100; // Rolling window size
@@ -27,7 +26,6 @@ export function PriceChart({
   timestamp,
   pnl,
   intervalSeconds = 15,
-  height = 180,
 }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -60,7 +58,7 @@ export function PriceChart({
       const isDark = document.documentElement.classList.contains("dark");
 
       const chart = createChart(containerRef.current, {
-        height,
+        autoSize: true,
         layout: {
           background: { type: ColorType.Solid, color: "transparent" },
           textColor: isDark ? "#888" : "#666",
@@ -128,20 +126,7 @@ export function PriceChart({
       pnlDataRef.current = [];
       currentCandleTimeRef.current = null;
 
-      // Handle resize
-      const handleResize = () => {
-        if (containerRef.current && chartRef.current) {
-          chartRef.current.applyOptions({
-            width: containerRef.current.clientWidth,
-          });
-        }
-      };
-
-      window.addEventListener("resize", handleResize);
-      handleResize();
-
       return () => {
-        window.removeEventListener("resize", handleResize);
         chart.remove();
         chartRef.current = null;
         seriesRef.current = null;
@@ -152,7 +137,7 @@ export function PriceChart({
       setChartError("Failed to load chart");
       return;
     }
-  }, [height, intervalSeconds]);
+  }, [intervalSeconds]);
 
   // Update both price candles and PnL series together for synchronization
   useEffect(() => {
@@ -255,10 +240,7 @@ export function PriceChart({
 
   if (chartError) {
     return (
-      <div
-        className="w-full flex items-center justify-center text-muted-foreground text-sm"
-        style={{ height }}
-      >
+      <div className="w-full h-full flex items-center justify-center text-muted-foreground text-sm">
         {chartError}
       </div>
     );
@@ -267,8 +249,7 @@ export function PriceChart({
   return (
     <div
       ref={containerRef}
-      className="w-full"
-      style={{ height }}
+      className="w-full h-full"
     />
   );
 }
