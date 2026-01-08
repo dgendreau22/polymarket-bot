@@ -313,12 +313,33 @@ export class PolymarketWebSocket {
       // Handle last trade price events
       if (message.event_type === "last_trade_price") {
         const assetId = message.asset_id as string;
+
+        // Normalize timestamp - handle Unix timestamps (seconds or ms) and ISO strings
+        let normalizedTimestamp: string;
+        const rawTs = message.timestamp;
+        if (typeof rawTs === 'number') {
+          // Unix timestamp: if < 1e12, it's seconds; otherwise milliseconds
+          normalizedTimestamp = new Date(rawTs > 1e12 ? rawTs : rawTs * 1000).toISOString();
+        } else if (typeof rawTs === 'string' && rawTs) {
+          const asNum = Number(rawTs);
+          if (!isNaN(asNum)) {
+            // Numeric string (Unix timestamp)
+            normalizedTimestamp = new Date(asNum > 1e12 ? asNum : asNum * 1000).toISOString();
+          } else {
+            // Assume ISO string or other parseable format
+            const parsed = new Date(rawTs);
+            normalizedTimestamp = isNaN(parsed.getTime()) ? new Date().toISOString() : rawTs;
+          }
+        } else {
+          normalizedTimestamp = new Date().toISOString();
+        }
+
         const trade: LastTrade = {
           asset_id: assetId,
           price: message.price as string,
           size: message.size as string || "0",
           side: (message.side as "BUY" | "SELL") || "BUY",
-          timestamp: (message.timestamp as string) || new Date().toISOString(),
+          timestamp: normalizedTimestamp,
         };
         const callbacks = this.tradeCallbacks.get(assetId) || [];
         console.log(`[WS] last_trade_price: ${trade.price} (${callbacks.length} callbacks)`);

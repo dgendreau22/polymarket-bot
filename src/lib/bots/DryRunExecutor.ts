@@ -14,6 +14,8 @@ import type { Trade, StrategySignal, TradeExecutionResult, LimitOrder } from './
 import type { Bot } from './Bot';
 import type { OrderBook } from '../polymarket/types';
 import { createLimitOrder, rowToLimitOrder, updateOrderFill } from '../persistence/LimitOrderRepository';
+import { getOrCreatePosition, updatePosition } from '../persistence/BotRepository';
+import { calculatePositionUpdate } from '../utils/PositionCalculator';
 
 /**
  * Check if an order is marketable (would fill immediately against the order book)
@@ -109,6 +111,47 @@ export async function executeDryRunTrade(
         `[DryRun] Marketable order filled immediately: ${side} ${signal.quantity} @ ${fillPrice} (limit was ${signal.price})`
       );
 
+      // Calculate PnL and update position
+      const fillPriceNum = parseFloat(fillPrice);
+      const fillQuantity = parseFloat(signal.quantity);
+      let pnl = 0;
+
+      // Get current position
+      const position = getOrCreatePosition(bot.id, bot.marketId, assetId, signal.side);
+      const currentSize = parseFloat(position.size);
+      const currentAvgPrice = parseFloat(position.avg_entry_price);
+
+      // Calculate position update
+      const update = calculatePositionUpdate(
+        currentSize,
+        currentAvgPrice,
+        fillQuantity,
+        fillPriceNum,
+        side
+      );
+
+      if (side === 'SELL') {
+        pnl = update.realizedPnl;
+        const newRealizedPnl = parseFloat(position.realized_pnl) + pnl;
+
+        // Update position with realized PnL
+        updatePosition(bot.id, assetId, {
+          size: update.newSize.toFixed(6),
+          avgEntryPrice: update.newAvgPrice.toFixed(6),
+          realizedPnl: newRealizedPnl.toFixed(6),
+        });
+
+        console.log(`[DryRun] SELL: ${fillQuantity} @ ${fillPrice} | PnL: ${pnl.toFixed(4)} | Position: ${currentSize} -> ${update.newSize}`);
+      } else {
+        // BUY: update position without PnL
+        updatePosition(bot.id, assetId, {
+          size: update.newSize.toFixed(6),
+          avgEntryPrice: update.newAvgPrice.toFixed(6),
+        });
+
+        console.log(`[DryRun] BUY: ${fillQuantity} @ ${fillPrice} | Position: ${currentSize} -> ${update.newSize} @ avg ${update.newAvgPrice.toFixed(4)}`);
+      }
+
       // Create trade record for immediate fill
       const trade: Trade = {
         id: tradeId,
@@ -121,9 +164,9 @@ export async function executeDryRunTrade(
         outcome: signal.side,
         price: fillPrice,
         quantity: signal.quantity,
-        totalValue: (parseFloat(fillPrice) * parseFloat(signal.quantity)).toFixed(6),
+        totalValue: (fillPriceNum * fillQuantity).toFixed(6),
         fee: '0',
-        pnl: '0',
+        pnl: pnl.toFixed(6),
         status: 'filled',
         orderId: orderId,
         executedAt: now,
