@@ -400,8 +400,9 @@ export default function BotDetailPage() {
 
           setLastTrade((prev) => {
             // Only update if we don't have real WebSocket trade data
-            const hasWebSocketDetails = prev && prev.asset_id !== "" && prev.size !== "0";
-            if (hasWebSocketDetails) {
+            // Check asset_id only - last_trade_price events may not include size
+            const hasWebSocketData = prev && prev.asset_id !== "";
+            if (hasWebSocketData) {
               return prev; // Keep WebSocket data
             }
             return {
@@ -479,8 +480,9 @@ export default function BotDetailPage() {
           const midPrice = ((bestBidPrice + bestAskPrice) / 2).toFixed(4);
 
           setNoLastTrade((prev) => {
-            const hasWebSocketDetails = prev && prev.asset_id !== "" && prev.size !== "0";
-            if (hasWebSocketDetails) {
+            // Check asset_id only - last_trade_price events may not include size
+            const hasWebSocketData = prev && prev.asset_id !== "";
+            if (hasWebSocketData) {
               return prev;
             }
             return {
@@ -559,7 +561,7 @@ export default function BotDetailPage() {
         // Subscribe to order book updates
         ws.subscribeOrderBook([assetId], orderBookCallback);
 
-        // Subscribe to last trade updates
+        // Subscribe to last trade updates (for chart and Last price display)
         ws.subscribeTrades([assetId], tradeCallback);
 
         // Subscribe to tick size updates

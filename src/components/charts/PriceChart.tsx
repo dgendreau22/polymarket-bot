@@ -4,7 +4,6 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import {
   createChart,
   IChartApi,
-  ISeriesApi,
   CandlestickData,
   LineData,
   Time,
@@ -101,6 +100,11 @@ export function PriceChart({
         borderDownColor: "#ef4444",
         wickUpColor: "#22c55e",
         wickDownColor: "#ef4444",
+        priceFormat: {
+          type: "price",
+          precision: 2,
+          minMove: 0.01,
+        },
       });
 
       // Add PnL line series on left scale
