@@ -27,6 +27,10 @@ interface Subscription {
 
 const DEFAULT_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 
+// Timestamps below this value are in seconds, above are in milliseconds
+// 1e12 ms = Sep 2001, so any valid modern timestamp in ms will be above this
+const UNIX_MS_THRESHOLD = 1e12;
+
 export class PolymarketWebSocket {
   private ws: WebSocket | null = null;
   private config: Required<WebSocketConfig>;
@@ -319,12 +323,12 @@ export class PolymarketWebSocket {
         const rawTs = message.timestamp;
         if (typeof rawTs === 'number') {
           // Unix timestamp: if < 1e12, it's seconds; otherwise milliseconds
-          normalizedTimestamp = new Date(rawTs > 1e12 ? rawTs : rawTs * 1000).toISOString();
+          normalizedTimestamp = new Date(rawTs > UNIX_MS_THRESHOLD ? rawTs : rawTs * 1000).toISOString();
         } else if (typeof rawTs === 'string' && rawTs) {
           const asNum = Number(rawTs);
           if (!isNaN(asNum)) {
             // Numeric string (Unix timestamp)
-            normalizedTimestamp = new Date(asNum > 1e12 ? asNum : asNum * 1000).toISOString();
+            normalizedTimestamp = new Date(asNum > UNIX_MS_THRESHOLD ? asNum : asNum * 1000).toISOString();
           } else {
             // Assume ISO string or other parseable format
             const parsed = new Date(rawTs);
