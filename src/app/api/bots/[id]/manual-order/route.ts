@@ -59,7 +59,15 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    // 3. Validate action
+    // 3. Validate bot state - allow running and paused (for manual testing), reject stopped
+    if (bot.state === 'stopped') {
+      return NextResponse.json(
+        { success: false, error: 'Cannot place orders on a stopped bot - start or resume the bot first' },
+        { status: 400 }
+      );
+    }
+
+    // 4. Validate action
     if (!['BUY', 'SELL'].includes(action)) {
       return NextResponse.json(
         { success: false, error: 'Action must be BUY or SELL' },
@@ -67,7 +75,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    // 4. Validate outcome
+    // 5. Validate outcome
     if (!['YES', 'NO'].includes(outcome)) {
       return NextResponse.json(
         { success: false, error: 'Outcome must be YES or NO' },
@@ -75,7 +83,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    // 5. Determine asset ID based on outcome
+    // 6. Determine asset ID based on outcome
     const assetId = outcome === 'YES' ? bot.config.assetId : bot.config.noAssetId;
     if (!assetId) {
       return NextResponse.json(
@@ -84,7 +92,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    // 6. Validate quantity
+    // 7. Validate quantity
     if (!quantity || parseFloat(quantity) <= 0) {
       return NextResponse.json(
         { success: false, error: 'Quantity must be greater than 0' },
@@ -92,7 +100,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    // 7. For SELL orders, validate position
+    // 8. For SELL orders, validate position
     if (action === 'SELL') {
       const position = getPosition(botId, assetId);
       const posSize = position ? parseFloat(position.size) : 0;
@@ -104,20 +112,20 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       }
     }
 
-    // 8. Determine final price
-    let finalPrice = price;
+    // 9. Fetch order book once - used for both price determination and marketability check
     const CLOB_HOST = process.env.POLYMARKET_CLOB_HOST || 'https://clob.polymarket.com';
+    const orderBookResponse = await fetch(`${CLOB_HOST}/book?token_id=${encodeURIComponent(assetId)}`, {
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache' },
+    });
+    const orderBook = await orderBookResponse.json();
+    const bids = orderBook.bids || [];
+    const asks = orderBook.asks || [];
+
+    // 10. Determine final price
+    let finalPrice = price;
 
     if (orderType === 'market' || !price) {
-      // Fetch order book for market price
-      const response = await fetch(`${CLOB_HOST}/book?token_id=${encodeURIComponent(assetId)}`, {
-        cache: 'no-store',
-        headers: { 'Cache-Control': 'no-cache' },
-      });
-      const orderBookData = await response.json();
-      const bids = orderBookData.bids || [];
-      const asks = orderBookData.asks || [];
-
       if (action === 'BUY') {
         if (asks.length === 0) {
           return NextResponse.json(
@@ -143,7 +151,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       }
     }
 
-    // 9. Validate price
+    // 11. Validate price
     if (!finalPrice) {
       return NextResponse.json(
         { success: false, error: 'Price is required for limit orders' },
@@ -159,15 +167,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    // 10. Get order book for marketability check
-    // Always fetch fresh for manual orders since bot may be paused/stopped
-    const orderBookResponse = await fetch(`${CLOB_HOST}/book?token_id=${encodeURIComponent(assetId)}`, {
-      cache: 'no-store',
-      headers: { 'Cache-Control': 'no-cache' },
-    });
-    const orderBook = await orderBookResponse.json();
-
-    // 11. Construct signal and execute
+    // 12. Construct signal and execute (reusing the same orderBook for marketability check)
     const signal: StrategySignal = {
       action,
       side: outcome,

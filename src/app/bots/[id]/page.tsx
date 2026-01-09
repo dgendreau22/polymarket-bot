@@ -45,57 +45,6 @@ function formatStrategyName(slug: string): string {
     .join(" ");
 }
 
-// Aggregated order type for grouping orders at the same price
-interface AggregatedOrder {
-  price: string;
-  side: 'BUY' | 'SELL';
-  outcome: 'YES' | 'NO';
-  totalQuantity: number;
-  totalFilled: number;
-  orderCount: number;
-  latestCreatedAt: Date;
-  hasPartialFill: boolean;
-}
-
-// Aggregate orders by price+side+outcome and sort by latest first
-function aggregateOrders(orders: LimitOrder[]): AggregatedOrder[] {
-  const grouped = new Map<string, AggregatedOrder>();
-
-  for (const order of orders) {
-    const key = `${order.price}-${order.side}-${order.outcome}`;
-    const existing = grouped.get(key);
-    const createdAt = new Date(order.createdAt);
-
-    if (existing) {
-      existing.totalQuantity += parseFloat(order.quantity);
-      existing.totalFilled += parseFloat(order.filledQuantity);
-      existing.orderCount += 1;
-      if (createdAt > existing.latestCreatedAt) {
-        existing.latestCreatedAt = createdAt;
-      }
-      if (order.status === 'partially_filled') {
-        existing.hasPartialFill = true;
-      }
-    } else {
-      grouped.set(key, {
-        price: order.price,
-        side: order.side,
-        outcome: order.outcome,
-        totalQuantity: parseFloat(order.quantity),
-        totalFilled: parseFloat(order.filledQuantity),
-        orderCount: 1,
-        latestCreatedAt: createdAt,
-        hasPartialFill: order.status === 'partially_filled',
-      });
-    }
-  }
-
-  // Sort by latest first
-  return Array.from(grouped.values()).sort(
-    (a, b) => b.latestCreatedAt.getTime() - a.latestCreatedAt.getTime()
-  );
-}
-
 export default function BotDetailPage() {
   const params = useParams();
   const id = params.id as string;
@@ -159,37 +108,6 @@ export default function BotDetailPage() {
       setOrderSortDirection(column === 'price' ? 'desc' : 'asc');
     }
   }, [orderSortColumn]);
-
-  // Sort aggregated orders
-  const sortOrders = useCallback((orders: AggregatedOrder[]): AggregatedOrder[] => {
-    return [...orders].sort((a, b) => {
-      let comparison = 0;
-      switch (orderSortColumn) {
-        case 'price':
-          comparison = parseFloat(a.price) - parseFloat(b.price);
-          break;
-        case 'side':
-          comparison = a.side.localeCompare(b.side);
-          break;
-        case 'outcome':
-          comparison = a.outcome.localeCompare(b.outcome);
-          break;
-        case 'quantity':
-          comparison = a.totalQuantity - b.totalQuantity;
-          break;
-        case 'filled':
-          comparison = a.totalFilled - b.totalFilled;
-          break;
-        case 'status':
-          comparison = (a.hasPartialFill ? 1 : 0) - (b.hasPartialFill ? 1 : 0);
-          break;
-        case 'latest':
-          comparison = a.latestCreatedAt.getTime() - b.latestCreatedAt.getTime();
-          break;
-      }
-      return orderSortDirection === 'asc' ? comparison : -comparison;
-    });
-  }, [orderSortColumn, orderSortDirection]);
 
   // Sort individual orders
   const sortIndividualOrders = useCallback((orders: LimitOrder[]): LimitOrder[] => {
