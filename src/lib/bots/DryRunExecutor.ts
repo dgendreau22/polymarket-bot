@@ -10,11 +10,12 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import type { Trade, StrategySignal, TradeExecutionResult, LimitOrder } from './types';
+import type { Trade, StrategySignal, TradeExecutionResult, LimitOrder, BotEvent } from './types';
 import type { Bot } from './Bot';
 import type { OrderBook } from '../polymarket/types';
 import { createLimitOrder, rowToLimitOrder, updateOrderFill } from '../persistence/LimitOrderRepository';
 import { getOrCreatePosition, updatePosition } from '../persistence/BotRepository';
+import { createTrade } from '../persistence/TradeRepository';
 import { calculatePositionUpdate } from '../utils/PositionCalculator';
 
 /**
@@ -33,7 +34,6 @@ function getMarketableFillPrice(
     const sortedAsks = [...asks].sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
     const bestAsk = parseFloat(sortedAsks[0].price);
     if (orderPrice >= bestAsk) {
-      console.log(`[DryRun] Marketable BUY: order @ ${orderPrice} >= best ask @ ${bestAsk}`);
       return sortedAsks[0].price;
     }
   } else {
@@ -42,7 +42,6 @@ function getMarketableFillPrice(
     const sortedBids = [...bids].sort((a, b) => parseFloat(b.price) - parseFloat(a.price));
     const bestBid = parseFloat(sortedBids[0].price);
     if (orderPrice <= bestBid) {
-      console.log(`[DryRun] Marketable SELL: order @ ${orderPrice} <= best bid @ ${bestBid}`);
       return sortedBids[0].price;
     }
   }
@@ -61,7 +60,8 @@ function getMarketableFillPrice(
 export async function executeDryRunTrade(
   bot: Bot,
   signal: StrategySignal,
-  orderBook?: OrderBook | null
+  orderBook?: OrderBook | null,
+  onEvent?: (event: BotEvent) => void
 ): Promise<TradeExecutionResult> {
   try {
     const now = new Date();
@@ -69,19 +69,6 @@ export async function executeDryRunTrade(
     const tradeId = uuidv4();
     const side = signal.action as 'BUY' | 'SELL';
     const orderPrice = parseFloat(signal.price);
-
-    // Debug: log order book state at order creation
-    if (orderBook) {
-      const asks = orderBook.asks || [];
-      const bids = orderBook.bids || [];
-      const sortedAsks = [...asks].sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
-      const sortedBids = [...bids].sort((a, b) => parseFloat(b.price) - parseFloat(a.price));
-      const bestAsk = sortedAsks.length > 0 ? sortedAsks[0].price : 'none';
-      const bestBid = sortedBids.length > 0 ? sortedBids[0].price : 'none';
-      console.log(`[DryRun] Order creation: ${side} @ ${orderPrice} | OrderBook: bid=${bestBid}, ask=${bestAsk}`);
-    } else {
-      console.log(`[DryRun] Order creation: ${side} @ ${orderPrice} | OrderBook: NULL`);
-    }
 
     // Check if order is marketable (would fill immediately)
     const fillPrice = getMarketableFillPrice(side, orderPrice, orderBook || null);
@@ -173,6 +160,12 @@ export async function executeDryRunTrade(
         createdAt: now,
       };
 
+      // Persist trade to database
+      createTrade(trade);
+
+      // Emit TRADE_EXECUTED event for filled orders
+      onEvent?.({ type: 'TRADE_EXECUTED', trade });
+
       return {
         success: true,
         trade,
@@ -185,6 +178,22 @@ export async function executeDryRunTrade(
     console.log(
       `[DryRun] Order placed: ${side} ${signal.quantity} ${signal.side} @ ${signal.price} | Order ID: ${orderId}`
     );
+
+    // Emit ORDER_FILLED event with pending info to trigger UI refresh
+    onEvent?.({
+      type: 'ORDER_FILLED',
+      fill: {
+        orderId,
+        botId: bot.id,
+        filledQuantity: '0',
+        remainingQuantity: signal.quantity,
+        fillPrice: signal.price,
+        isFullyFilled: false,
+        side,
+        outcome: signal.side,
+      },
+      timestamp: new Date(),
+    });
 
     return {
       success: true,
@@ -212,7 +221,14 @@ export function createDryRunExecutor(): (bot: Bot, signal: StrategySignal) => Pr
     const orderBook = signal.side === 'YES'
       ? bot.getOrderBook()
       : (bot.getNoOrderBook() || bot.getOrderBook());
-    const result = await executeDryRunTrade(bot, signal, orderBook);
+
+    // Pass bot.emitEvent as callback to route events to bot's subscribers
+    const result = await executeDryRunTrade(
+      bot,
+      signal,
+      orderBook,
+      (event) => bot.emitEvent(event)
+    );
 
     if (result.success && result.trade) {
       return result.trade;

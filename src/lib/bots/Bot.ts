@@ -202,10 +202,25 @@ export class Bot {
     });
 
     this.marketData.onTrade((label, trade) => {
-      if (this.state === 'running' && this.config.mode === 'dry_run') {
-        const fills = processTradeForBotFills(this.id, trade);
-        for (const fill of fills) {
-          this.handleOrderFilled(fill);
+      // Match orders even when paused - only stop when fully stopped
+      if ((this.state === 'running' || this.state === 'paused') && this.config.mode === 'dry_run') {
+        // When paused, use fillMarketableOrders which checks ALL orders against BOTH order books
+        // This ensures NO orders fill even when only YES trades happen
+        if (this.state === 'paused') {
+          const yesOrderBook = this.marketData!.getOrderBook('YES');
+          const noOrderBook = this.marketData!.getOrderBook('NO');
+          if (yesOrderBook || noOrderBook) {
+            const fills = fillMarketableOrders(this.id, yesOrderBook, noOrderBook);
+            for (const fill of fills) {
+              this.handleOrderFilled(fill);
+            }
+          }
+        } else {
+          // When running, use trade-based matching (execution cycle also runs fillMarketableOrders)
+          const fills = processTradeForBotFills(this.id, trade);
+          for (const fill of fills) {
+            this.handleOrderFilled(fill);
+          }
         }
       }
     });
@@ -768,7 +783,7 @@ export class Bot {
     this.eventHandlers = this.eventHandlers.filter(h => h !== handler);
   }
 
-  private emitEvent(event: BotEvent): void {
+  public emitEvent(event: BotEvent): void {
     for (const handler of this.eventHandlers) {
       try {
         handler(event);

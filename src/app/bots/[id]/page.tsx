@@ -13,6 +13,7 @@ import { Countdown } from "@/components/ui/countdown";
 import { BotStatusBadge, BotControls } from "@/components/bots";
 import { TradesTable } from "@/components/trades";
 import { PriceChart } from "@/components/charts";
+import { OrderPanel } from "@/components/orders";
 const POLL_INTERVAL_MS = 3000;
 
 import {
@@ -30,7 +31,7 @@ import type { BotInstance, Trade, StrategyDefinition, LimitOrder, Position } fro
 import type { LastTrade, OrderBook, OrderBookEntry } from "@/lib/polymarket/types";
 import { calculateRealizedPnl, calculateUnrealizedPnl, calculateAvgPrice } from "@/lib/bots/pnl";
 import { cn } from "@/lib/utils";
-import { CircleDot, XCircle, ChevronUp, ChevronDown } from "lucide-react";
+import { CircleDot, XCircle, ChevronUp, ChevronDown, X } from "lucide-react";
 
 // Sort configuration for pending orders
 type OrderSortColumn = 'price' | 'side' | 'outcome' | 'quantity' | 'filled' | 'status' | 'latest';
@@ -107,6 +108,7 @@ export default function BotDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [cancellingOrders, setCancellingOrders] = useState(false);
+  const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
 
   // Market data state (YES side)
   const [bestBid, setBestBid] = useState<string | null>(null);
@@ -189,6 +191,37 @@ export default function BotDetailPage() {
     });
   }, [orderSortColumn, orderSortDirection]);
 
+  // Sort individual orders
+  const sortIndividualOrders = useCallback((orders: LimitOrder[]): LimitOrder[] => {
+    return [...orders].sort((a, b) => {
+      let comparison = 0;
+      switch (orderSortColumn) {
+        case 'price':
+          comparison = parseFloat(a.price) - parseFloat(b.price);
+          break;
+        case 'side':
+          comparison = a.side.localeCompare(b.side);
+          break;
+        case 'outcome':
+          comparison = a.outcome.localeCompare(b.outcome);
+          break;
+        case 'quantity':
+          comparison = parseFloat(a.quantity) - parseFloat(b.quantity);
+          break;
+        case 'filled':
+          comparison = parseFloat(a.filledQuantity) - parseFloat(b.filledQuantity);
+          break;
+        case 'status':
+          comparison = a.status.localeCompare(b.status);
+          break;
+        case 'latest':
+          comparison = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+          break;
+      }
+      return orderSortDirection === 'asc' ? comparison : -comparison;
+    });
+  }, [orderSortColumn, orderSortDirection]);
+
   // SSE connection state
   const [sseConnected, setSseConnected] = useState(false);
 
@@ -237,6 +270,21 @@ export default function BotDetailPage() {
       console.error("Failed to cancel orders:", err);
     } finally {
       setCancellingOrders(false);
+    }
+  };
+
+  const cancelOrder = async (orderId: string) => {
+    setCancellingOrderId(orderId);
+    try {
+      const res = await fetch(`/api/bots/${id}/orders/${orderId}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.success) {
+        setActiveOrders(prev => prev.filter(o => o.id !== orderId));
+      }
+    } catch (err) {
+      console.error("Failed to cancel order:", err);
+    } finally {
+      setCancellingOrderId(null);
     }
   };
 
@@ -805,8 +853,8 @@ export default function BotDetailPage() {
           </div>
         </div>
 
-        {/* Current Position + Price Chart */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+        {/* Current Position + Price Chart + Order Panel */}
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-6">
           {/* Current Position */}
           <div className="lg:col-span-2 bg-card border rounded-lg p-6">
           <div className="flex items-center justify-between mb-4">
@@ -1064,6 +1112,21 @@ export default function BotDetailPage() {
               />
             </div>
           </div>
+
+          {/* Manual Order Panel */}
+          <OrderPanel
+            botId={id}
+            botState={bot.state}
+            assetId={bot.config.assetId}
+            noAssetId={bot.config.noAssetId}
+            positions={positions}
+            bestBid={bestBid}
+            bestAsk={bestAsk}
+            noBestBid={noBestBid}
+            noBestAsk={noBestAsk}
+            formatPrice={formatPrice}
+            onOrderSubmitted={fetchData}
+          />
         </div>
 
         {/* Market Data, Pending Orders & Recent Trades - Side by Side */}
@@ -1525,12 +1588,15 @@ export default function BotDetailPage() {
                         {orderSortColumn === 'latest' && (orderSortDirection === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
                       </span>
                     </th>
+                    <th className="w-[30px] bg-card"></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {sortOrders(aggregateOrders(activeOrders)).map((order) => {
+                  {sortIndividualOrders(activeOrders).map((order) => {
+                    const remaining = parseFloat(order.quantity) - parseFloat(order.filledQuantity);
+                    const hasPartialFill = parseFloat(order.filledQuantity) > 0;
                     return (
-                      <tr key={`${order.price}-${order.side}-${order.outcome}`} className="border-b border-muted last:border-0">
+                      <tr key={order.id} className="border-b border-muted last:border-0">
                         <td className="py-1.5 px-1">
                           <span
                             className={cn(
@@ -1539,9 +1605,6 @@ export default function BotDetailPage() {
                             )}
                           >
                             {order.side}
-                            {order.orderCount > 1 && (
-                              <span className="ml-1 opacity-70">({order.orderCount})</span>
-                            )}
                           </span>
                         </td>
                         <td className="py-1.5 px-1">
@@ -1558,23 +1621,33 @@ export default function BotDetailPage() {
                           {formatPrice(order.price)}
                         </td>
                         <td className="py-1.5 px-1 text-right font-mono text-xs">
-                          <span className={order.totalFilled > 0 ? "text-yellow-500" : ""}>
-                            {(order.totalQuantity - order.totalFilled).toFixed(0)}
+                          <span className={hasPartialFill ? "text-yellow-500" : ""}>
+                            {remaining.toFixed(0)}
                           </span>
-                          <span className="text-muted-foreground">/{order.totalQuantity.toFixed(0)}</span>
+                          <span className="text-muted-foreground">/{parseFloat(order.quantity).toFixed(0)}</span>
                         </td>
                         <td className="py-1.5 px-1">
                           <span
                             className={cn(
                               "w-2 h-2 inline-block rounded-full",
-                              !order.hasPartialFill && "bg-blue-500",
-                              order.hasPartialFill && "bg-yellow-500"
+                              !hasPartialFill && "bg-blue-500",
+                              hasPartialFill && "bg-yellow-500"
                             )}
-                            title={order.hasPartialFill ? "Partial fill" : "Open"}
+                            title={hasPartialFill ? "Partial fill" : "Open"}
                           />
                         </td>
                         <td className="py-1.5 px-1 text-muted-foreground text-xs">
-                          {order.latestCreatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                          {new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                        </td>
+                        <td className="py-1.5 px-1">
+                          <button
+                            onClick={() => cancelOrder(order.id)}
+                            disabled={cancellingOrderId === order.id}
+                            className="text-muted-foreground hover:text-red-500 disabled:opacity-50"
+                            title="Cancel order"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
                         </td>
                       </tr>
                     );
