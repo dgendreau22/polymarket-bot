@@ -12,11 +12,21 @@ import {
   LineSeries,
 } from "lightweight-charts";
 
+interface CandleData {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+}
+
 interface PriceChartProps {
   price: number | null;
   timestamp: string | null;
   pnl?: number | null;
   intervalSeconds?: number;
+  initialCandles?: CandleData[];
 }
 
 const MAX_CANDLES = 100; // Rolling window size
@@ -26,6 +36,7 @@ export function PriceChart({
   timestamp,
   pnl,
   intervalSeconds = 15,
+  initialCandles,
 }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -138,6 +149,32 @@ export function PriceChart({
       return;
     }
   }, [intervalSeconds]);
+
+  // Load initial candles when provided (for historical data)
+  useEffect(() => {
+    if (!initialCandles || initialCandles.length === 0 || !seriesRef.current) return;
+
+    // Sort candles by time ascending to ensure correct order
+    const sortedCandles = [...initialCandles]
+      .map(c => ({
+        time: c.time as Time,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+      }))
+      .sort((a, b) => (a.time as number) - (b.time as number));
+
+    // Update refs with the loaded data
+    candlesRef.current = sortedCandles as CandlestickData[];
+    currentCandleTimeRef.current = sortedCandles.length > 0
+      ? sortedCandles[sortedCandles.length - 1].time as number
+      : null;
+
+    // Set data on series
+    seriesRef.current.setData(sortedCandles);
+    chartRef.current?.timeScale().fitContent();
+  }, [initialCandles]);
 
   // Update both price candles and PnL series together for synchronization
   useEffect(() => {

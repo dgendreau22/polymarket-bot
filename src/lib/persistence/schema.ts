@@ -97,6 +97,75 @@ export function initializeSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_limit_orders_price ON limit_orders(price);
   `);
 
+  // ============================================================================
+  // Data Recorder Tables (for market data analysis)
+  // ============================================================================
+
+  // Recording sessions: tracks each market recording session
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS recording_sessions (
+      id TEXT PRIMARY KEY,
+      market_id TEXT NOT NULL,
+      market_name TEXT NOT NULL,
+      event_slug TEXT NOT NULL,
+      yes_asset_id TEXT NOT NULL,
+      no_asset_id TEXT NOT NULL,
+      start_time TEXT NOT NULL,
+      end_time TEXT NOT NULL,
+      tick_count INTEGER NOT NULL DEFAULT 0,
+      snapshot_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      ended_at TEXT
+    )
+  `);
+
+  // Market ticks: raw tick data (every price change)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS market_ticks (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES recording_sessions(id) ON DELETE CASCADE,
+      asset_id TEXT NOT NULL,
+      outcome TEXT NOT NULL CHECK(outcome IN ('YES', 'NO')),
+      timestamp TEXT NOT NULL,
+      price TEXT NOT NULL,
+      size TEXT NOT NULL DEFAULT '0',
+      side TEXT NOT NULL CHECK(side IN ('BUY', 'SELL')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
+  // Market snapshots: order book snapshots (every 15 seconds)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS market_snapshots (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES recording_sessions(id) ON DELETE CASCADE,
+      timestamp TEXT NOT NULL,
+      yes_best_bid TEXT,
+      yes_best_ask TEXT,
+      no_best_bid TEXT,
+      no_best_ask TEXT,
+      yes_bid_depth TEXT,
+      yes_ask_depth TEXT,
+      no_bid_depth TEXT,
+      no_ask_depth TEXT,
+      combined_cost TEXT,
+      spread TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
+  // Indexes for data recorder tables
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_recording_sessions_market ON recording_sessions(market_id);
+    CREATE INDEX IF NOT EXISTS idx_recording_sessions_event_slug ON recording_sessions(event_slug);
+    CREATE INDEX IF NOT EXISTS idx_market_ticks_session ON market_ticks(session_id);
+    CREATE INDEX IF NOT EXISTS idx_market_ticks_timestamp ON market_ticks(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_market_ticks_asset ON market_ticks(asset_id);
+    CREATE INDEX IF NOT EXISTS idx_market_ticks_outcome ON market_ticks(outcome);
+    CREATE INDEX IF NOT EXISTS idx_market_snapshots_session ON market_snapshots(session_id);
+    CREATE INDEX IF NOT EXISTS idx_market_snapshots_timestamp ON market_snapshots(timestamp);
+  `);
+
   // Migration: Add market_name column to bots table if it doesn't exist
   try {
     db.exec(`ALTER TABLE bots ADD COLUMN market_name TEXT`);
@@ -231,6 +300,9 @@ export function dropAllTables(db: Database.Database): void {
     DROP TABLE IF EXISTS positions;
     DROP TABLE IF EXISTS trades;
     DROP TABLE IF EXISTS bots;
+    DROP TABLE IF EXISTS market_snapshots;
+    DROP TABLE IF EXISTS market_ticks;
+    DROP TABLE IF EXISTS recording_sessions;
   `);
   console.log('[Schema] All tables dropped');
 }
