@@ -17,7 +17,8 @@ import {
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { PriceChart } from "@/components/charts";
 import type { RecorderStatus, RecorderEvent } from "@/lib/data";
-import type { RecordingSessionRow, MarketTickRow, CandleData } from "@/lib/persistence/DataRepository";
+import type { RecordingSessionRow, MarketTickRow } from "@/lib/persistence/DataRepository";
+import { aggregateTicksToCandles, type CandleData } from "@/lib/utils/candles";
 import { cn } from "@/lib/utils";
 
 // Available timeframes for chart
@@ -27,46 +28,6 @@ const TIMEFRAMES = [
   { value: 60, label: "1m" },
   { value: 300, label: "5m" },
 ];
-
-// Aggregate ticks into candles (client-side)
-function aggregateTicksToCandles(ticks: MarketTickRow[], intervalSeconds: number): CandleData[] {
-  if (ticks.length === 0) return [];
-
-  const candles: CandleData[] = [];
-  let currentCandle: CandleData | null = null;
-
-  for (const tick of ticks) {
-    const tickTime = new Date(tick.timestamp).getTime() / 1000;
-    const candleTime = Math.floor(tickTime / intervalSeconds) * intervalSeconds;
-    const price = parseFloat(tick.price);
-    const size = parseFloat(tick.size);
-
-    if (!currentCandle || currentCandle.time !== candleTime) {
-      if (currentCandle) {
-        candles.push(currentCandle);
-      }
-      currentCandle = {
-        time: candleTime,
-        open: price,
-        high: price,
-        low: price,
-        close: price,
-        volume: size,
-      };
-    } else {
-      currentCandle.high = Math.max(currentCandle.high, price);
-      currentCandle.low = Math.min(currentCandle.low, price);
-      currentCandle.close = price;
-      currentCandle.volume += size;
-    }
-  }
-
-  if (currentCandle) {
-    candles.push(currentCandle);
-  }
-
-  return candles;
-}
 
 export default function DataAnalysisPage() {
   // State

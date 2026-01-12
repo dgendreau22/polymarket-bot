@@ -7,6 +7,9 @@
 import { v4 as uuidv4 } from 'uuid';
 import { getDatabase } from './database';
 
+// Re-export candle utilities for backwards compatibility
+export { aggregateTicksToCandles, type CandleData } from '@/lib/utils/candles';
+
 // ============================================================================
 // Type Definitions
 // ============================================================================
@@ -64,15 +67,6 @@ export interface SessionStats {
   volatility: { yes: number; no: number };
 }
 
-export interface CandleData {
-  time: number; // Unix timestamp in seconds
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-}
-
 // ============================================================================
 // Recording Session CRUD
 // ============================================================================
@@ -124,11 +118,12 @@ export function getRecordingSessionById(id: string): RecordingSessionRow | null 
  */
 export function getAllRecordingSessions(limit?: number): RecordingSessionRow[] {
   const db = getDatabase();
-  let query = 'SELECT * FROM recording_sessions ORDER BY created_at DESC';
   if (limit) {
-    query += ` LIMIT ${limit}`;
+    return db.prepare('SELECT * FROM recording_sessions ORDER BY created_at DESC LIMIT ?')
+      .all(limit) as RecordingSessionRow[];
   }
-  return db.prepare(query).all() as RecordingSessionRow[];
+  return db.prepare('SELECT * FROM recording_sessions ORDER BY created_at DESC')
+    .all() as RecordingSessionRow[];
 }
 
 /**
@@ -482,52 +477,3 @@ function calculateVolatility(sessionId: string, outcome: 'YES' | 'NO'): number {
   return Math.sqrt(variance);
 }
 
-/**
- * Aggregate raw ticks into OHLC candles for a given interval
- * @param ticks - Array of raw tick data
- * @param intervalSeconds - Candle interval in seconds (e.g., 15, 30, 60)
- * @returns Array of candle data
- */
-export function aggregateTicksToCandles(ticks: MarketTickRow[], intervalSeconds: number): CandleData[] {
-  if (ticks.length === 0) return [];
-
-  const candles: CandleData[] = [];
-  let currentCandle: CandleData | null = null;
-
-  for (const tick of ticks) {
-    const tickTime = new Date(tick.timestamp).getTime() / 1000;
-    const candleTime = Math.floor(tickTime / intervalSeconds) * intervalSeconds;
-    const price = parseFloat(tick.price);
-    const size = parseFloat(tick.size);
-
-    if (!currentCandle || currentCandle.time !== candleTime) {
-      // Save previous candle if exists
-      if (currentCandle) {
-        candles.push(currentCandle);
-      }
-
-      // Start new candle
-      currentCandle = {
-        time: candleTime,
-        open: price,
-        high: price,
-        low: price,
-        close: price,
-        volume: size,
-      };
-    } else {
-      // Update current candle
-      currentCandle.high = Math.max(currentCandle.high, price);
-      currentCandle.low = Math.min(currentCandle.low, price);
-      currentCandle.close = price;
-      currentCandle.volume += size;
-    }
-  }
-
-  // Don't forget the last candle
-  if (currentCandle) {
-    candles.push(currentCandle);
-  }
-
-  return candles;
-}
