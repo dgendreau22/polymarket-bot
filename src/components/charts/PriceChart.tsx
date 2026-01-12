@@ -4,12 +4,16 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import {
   createChart,
   IChartApi,
+  ISeriesPrimitive,
+  IPrimitivePaneRenderer,
+  IPrimitivePaneView,
   CandlestickData,
   LineData,
   Time,
   ColorType,
   CandlestickSeries,
   LineSeries,
+  CrosshairMode,
 } from "lightweight-charts";
 
 interface CandleData {
@@ -19,6 +23,112 @@ interface CandleData {
   low: number;
   close: number;
   volume?: number;
+}
+
+// Session break interval in seconds (15 minutes)
+const SESSION_BREAK_INTERVAL = 15 * 60;
+
+/**
+ * Custom primitive to draw vertical dashed lines at session boundaries (every 15 minutes)
+ */
+class SessionBreaksPrimitive implements ISeriesPrimitive<Time> {
+  private _chart: IChartApi;
+  private _breakTimes: number[] = [];
+
+  constructor(chart: IChartApi) {
+    this._chart = chart;
+  }
+
+  updateBreakTimes(candles: CandlestickData[]) {
+    if (candles.length === 0) {
+      this._breakTimes = [];
+      return;
+    }
+
+    const breaks: number[] = [];
+    const firstTime = candles[0].time as number;
+    const lastTime = candles[candles.length - 1].time as number;
+
+    // Find the first 15-minute boundary at or after the first candle
+    const firstBreak = Math.ceil(firstTime / SESSION_BREAK_INTERVAL) * SESSION_BREAK_INTERVAL;
+
+    // Add all 15-minute boundaries within the data range
+    for (let t = firstBreak; t <= lastTime; t += SESSION_BREAK_INTERVAL) {
+      breaks.push(t);
+    }
+
+    this._breakTimes = breaks;
+  }
+
+  paneViews(): IPrimitivePaneView[] {
+    return [new SessionBreaksPaneView(this._chart, this._breakTimes)];
+  }
+}
+
+class SessionBreaksPaneView implements IPrimitivePaneView {
+  private _chart: IChartApi;
+  private _breakTimes: number[];
+
+  constructor(chart: IChartApi, breakTimes: number[]) {
+    this._chart = chart;
+    this._breakTimes = breakTimes;
+  }
+
+  renderer(): IPrimitivePaneRenderer {
+    return new SessionBreaksRenderer(this._chart, this._breakTimes);
+  }
+
+  zOrder(): "bottom" | "top" | "normal" {
+    return "bottom";
+  }
+}
+
+class SessionBreaksRenderer implements IPrimitivePaneRenderer {
+  private _chart: IChartApi;
+  private _breakTimes: number[];
+
+  constructor(chart: IChartApi, breakTimes: number[]) {
+    this._chart = chart;
+    this._breakTimes = breakTimes;
+  }
+
+  draw(target: CanvasRenderingTarget2D) {
+    target.useBitmapCoordinateSpace((scope) => {
+      const ctx = scope.context;
+      const { height } = scope.bitmapSize;
+      const timeScale = this._chart.timeScale();
+
+      ctx.save();
+      ctx.strokeStyle = "#666";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+
+      for (const breakTime of this._breakTimes) {
+        const x = timeScale.timeToCoordinate(breakTime as Time);
+        if (x === null) continue;
+
+        // Scale for device pixel ratio
+        const scaledX = Math.round(x * scope.horizontalPixelRatio);
+
+        ctx.beginPath();
+        ctx.moveTo(scaledX, 0);
+        ctx.lineTo(scaledX, height);
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    });
+  }
+}
+
+// Type for the canvas rendering target in lightweight-charts v5
+interface CanvasRenderingTarget2D {
+  useBitmapCoordinateSpace(callback: (scope: {
+    context: CanvasRenderingContext2D;
+    bitmapSize: { width: number; height: number };
+    horizontalPixelRatio: number;
+    verticalPixelRatio: number;
+  }) => void): void;
 }
 
 interface PriceChartProps {
@@ -44,6 +154,7 @@ export function PriceChart({
   // Using ReturnType to infer the correct series type from addSeries.
   const seriesRef = useRef<ReturnType<IChartApi["addSeries"]> | null>(null);
   const pnlSeriesRef = useRef<ReturnType<IChartApi["addSeries"]> | null>(null);
+  const sessionBreaksPrimitiveRef = useRef<SessionBreaksPrimitive | null>(null);
   const candlesRef = useRef<CandlestickData[]>([]);
   const pnlDataRef = useRef<LineData[]>([]);
   const currentCandleTimeRef = useRef<number | null>(null);
@@ -89,8 +200,28 @@ export function PriceChart({
           borderVisible: false,
           timeVisible: true,
           secondsVisible: true,
+          // Format axis tick labels in local timezone
+          tickMarkFormatter: (time: number) => {
+            const date = new Date(time * 1000);
+            return date.toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+            });
+          },
+        },
+        localization: {
+          // Custom time formatter for crosshair tooltip
+          timeFormatter: (time: number) => {
+            const date = new Date(time * 1000);
+            return date.toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+            });
+          },
         },
         crosshair: {
+          mode: CrosshairMode.Normal, // Free movement, not snapping to candles
           horzLine: {
             visible: true,
             labelVisible: true,
@@ -125,9 +256,14 @@ export function PriceChart({
         priceLineVisible: false,
       });
 
+      // Create and attach session breaks primitive
+      const sessionBreaksPrimitive = new SessionBreaksPrimitive(chart);
+      series.attachPrimitive(sessionBreaksPrimitive);
+
       chartRef.current = chart;
       seriesRef.current = series;
       pnlSeriesRef.current = pnlSeries;
+      sessionBreaksPrimitiveRef.current = sessionBreaksPrimitive;
 
       // Clear any previous error
       setChartError(null);
@@ -142,6 +278,7 @@ export function PriceChart({
         chartRef.current = null;
         seriesRef.current = null;
         pnlSeriesRef.current = null;
+        sessionBreaksPrimitiveRef.current = null;
       };
     } catch (error) {
       console.error("Failed to initialize chart:", error);
@@ -170,6 +307,9 @@ export function PriceChart({
     currentCandleTimeRef.current = sortedCandles.length > 0
       ? sortedCandles[sortedCandles.length - 1].time as number
       : null;
+
+    // Update session break lines
+    sessionBreaksPrimitiveRef.current?.updateBreakTimes(sortedCandles as CandlestickData[]);
 
     // Set data on series
     seriesRef.current.setData(sortedCandles);

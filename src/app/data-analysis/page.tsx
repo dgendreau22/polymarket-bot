@@ -12,6 +12,7 @@ import {
   Database,
   BarChart3,
   Clock,
+  Trash2,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { PriceChart } from "@/components/charts";
@@ -90,6 +91,14 @@ export default function DataAnalysisPage() {
   const [livePrice, setLivePrice] = useState<number | null>(null);
   const [liveTimestamp, setLiveTimestamp] = useState<string | null>(null);
 
+  // View mode: single session or all sessions
+  const [viewAllSessions, setViewAllSessions] = useState(false);
+  const [allTicks, setAllTicks] = useState<MarketTickRow[]>([]);
+
+  // Date range filter
+  const [startDate, setStartDate] = useState<string>("");
+  const [endDate, setEndDate] = useState<string>("");
+
   // Fetch status
   const fetchStatus = useCallback(async () => {
     try {
@@ -144,6 +153,19 @@ export default function DataAnalysisPage() {
     }
   }, []);
 
+  // Fetch all ticks across all sessions
+  const fetchAllTicks = useCallback(async () => {
+    try {
+      const res = await fetch("/api/data-recorder/ticks?outcome=YES");
+      const data = await res.json();
+      if (data.success) {
+        setAllTicks(data.data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch all ticks:", err);
+    }
+  }, []);
+
   // Start recorder
   const handleStart = async () => {
     setActionLoading(true);
@@ -179,6 +201,33 @@ export default function DataAnalysisPage() {
       setError(err instanceof Error ? err.message : "Failed to stop");
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  // Delete a session
+  const handleDeleteSession = async (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent row selection
+    if (!confirm("Delete this session and all its data?")) return;
+
+    try {
+      const res = await fetch(`/api/data-recorder/sessions/${sessionId}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (data.success) {
+        // Remove from local state
+        setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+        // Clear selection if deleted session was selected
+        if (selectedSessionId === sessionId) {
+          setSelectedSessionId(null);
+          setTicks([]);
+          setStats(null);
+        }
+      } else {
+        setError(data.error);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete session");
     }
   };
 
@@ -245,10 +294,47 @@ export default function DataAnalysisPage() {
     }
   }, [selectedSessionId, fetchTicks, fetchStats]);
 
-  // Aggregate ticks into candles based on timeframe
+  // Fetch all ticks when "All Sessions" mode is enabled
+  useEffect(() => {
+    if (viewAllSessions && allTicks.length === 0) {
+      fetchAllTicks();
+    }
+  }, [viewAllSessions, allTicks.length, fetchAllTicks]);
+
+  // Filter and aggregate ticks into candles based on timeframe and date range
   const candles = useMemo(() => {
-    return aggregateTicksToCandles(ticks, timeframe);
-  }, [ticks, timeframe]);
+    let ticksToUse = viewAllSessions ? allTicks : ticks;
+
+    // Apply date range filter
+    if (startDate || endDate) {
+      const startTime = startDate ? new Date(startDate).getTime() : 0;
+      const endTime = endDate ? new Date(endDate).getTime() : Infinity;
+
+      ticksToUse = ticksToUse.filter((tick) => {
+        const tickTime = new Date(tick.timestamp).getTime();
+        return tickTime >= startTime && tickTime <= endTime;
+      });
+    }
+
+    return aggregateTicksToCandles(ticksToUse, timeframe);
+  }, [ticks, allTicks, viewAllSessions, timeframe, startDate, endDate]);
+
+  // Count of filtered ticks for display
+  const filteredTickCount = useMemo(() => {
+    let ticksToUse = viewAllSessions ? allTicks : ticks;
+
+    if (startDate || endDate) {
+      const startTime = startDate ? new Date(startDate).getTime() : 0;
+      const endTime = endDate ? new Date(endDate).getTime() : Infinity;
+
+      ticksToUse = ticksToUse.filter((tick) => {
+        const tickTime = new Date(tick.timestamp).getTime();
+        return tickTime >= startTime && tickTime <= endTime;
+      });
+    }
+
+    return ticksToUse.length;
+  }, [ticks, allTicks, viewAllSessions, startDate, endDate]);
 
   const isRecording = status?.state === "recording";
   const isDiscovering = status?.state === "discovering";
@@ -378,23 +464,75 @@ export default function DataAnalysisPage() {
             <h2 className="font-semibold flex items-center gap-2">
               <BarChart3 className="w-5 h-5 text-blue-500" />
               Price Chart (YES)
+              {(viewAllSessions || selectedSessionId) && (
+                <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded">
+                  {filteredTickCount} ticks
+                </span>
+              )}
             </h2>
-            <div className="flex items-center gap-2">
-              {TIMEFRAMES.map((tf) => (
-                <button
-                  key={tf.value}
-                  onClick={() => setTimeframe(tf.value)}
-                  className={cn(
-                    "px-3 py-1 rounded text-sm font-medium transition-colors",
-                    timeframe === tf.value
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted hover:bg-muted/80"
-                  )}
-                >
-                  {tf.label}
-                </button>
-              ))}
+            <div className="flex items-center gap-4">
+              {/* All Sessions Toggle */}
+              <button
+                onClick={() => setViewAllSessions(!viewAllSessions)}
+                className={cn(
+                  "px-3 py-1 rounded text-sm font-medium transition-colors",
+                  viewAllSessions
+                    ? "bg-blue-500 text-white"
+                    : "bg-muted hover:bg-muted/80"
+                )}
+              >
+                All Sessions
+              </button>
+              {/* Timeframe Selector */}
+              <div className="flex items-center gap-2">
+                {TIMEFRAMES.map((tf) => (
+                  <button
+                    key={tf.value}
+                    onClick={() => setTimeframe(tf.value)}
+                    className={cn(
+                      "px-3 py-1 rounded text-sm font-medium transition-colors",
+                      timeframe === tf.value
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted hover:bg-muted/80"
+                    )}
+                  >
+                    {tf.label}
+                  </button>
+                ))}
+              </div>
             </div>
+          </div>
+          {/* Date Range Filter */}
+          <div className="flex items-center gap-4 mb-4">
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-muted-foreground">From:</label>
+              <input
+                type="datetime-local"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="bg-muted border border-border rounded px-2 py-1 text-sm"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-muted-foreground">To:</label>
+              <input
+                type="datetime-local"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="bg-muted border border-border rounded px-2 py-1 text-sm"
+              />
+            </div>
+            {(startDate || endDate) && (
+              <button
+                onClick={() => {
+                  setStartDate("");
+                  setEndDate("");
+                }}
+                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Clear
+              </button>
+            )}
           </div>
           <div className="h-[400px]">
             {candles.length > 0 || livePrice ? (
@@ -406,7 +544,11 @@ export default function DataAnalysisPage() {
               />
             ) : (
               <div className="h-full flex items-center justify-center text-muted-foreground">
-                {selectedSessionId ? "Loading chart data..." : "Select a session to view chart"}
+                {viewAllSessions
+                  ? "Loading all sessions data..."
+                  : selectedSessionId
+                    ? "Loading chart data..."
+                    : "Select a session or click 'All Sessions' to view chart"}
               </div>
             )}
           </div>
@@ -465,7 +607,8 @@ export default function DataAnalysisPage() {
                     <th className="pb-2 pr-4">Start Time</th>
                     <th className="pb-2 pr-4">Ticks</th>
                     <th className="pb-2 pr-4">Snapshots</th>
-                    <th className="pb-2">Status</th>
+                    <th className="pb-2 pr-4">Status</th>
+                    <th className="pb-2 w-10"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -490,12 +633,27 @@ export default function DataAnalysisPage() {
                       </td>
                       <td className="py-2 pr-4">{session.tick_count}</td>
                       <td className="py-2 pr-4">{session.snapshot_count}</td>
-                      <td className="py-2">
+                      <td className="py-2 pr-4">
                         {session.ended_at ? (
                           <span className="text-muted-foreground">Completed</span>
                         ) : (
                           <span className="text-green-500">Recording</span>
                         )}
+                      </td>
+                      <td className="py-2">
+                        <button
+                          onClick={(e) => handleDeleteSession(session.id, e)}
+                          disabled={!session.ended_at}
+                          className={cn(
+                            "p-1 rounded hover:bg-red-500/20 transition-colors",
+                            session.ended_at
+                              ? "text-muted-foreground hover:text-red-500"
+                              : "text-muted-foreground/30 cursor-not-allowed"
+                          )}
+                          title={session.ended_at ? "Delete session" : "Cannot delete active session"}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </td>
                     </tr>
                   ))}

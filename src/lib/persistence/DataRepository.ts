@@ -302,6 +302,19 @@ export function getTickCount(sessionId: string): number {
   return result.count;
 }
 
+/**
+ * Get all ticks across all sessions
+ */
+export function getAllTicks(outcome?: 'YES' | 'NO'): MarketTickRow[] {
+  const db = getDatabase();
+  if (outcome) {
+    return db.prepare('SELECT * FROM market_ticks WHERE outcome = ? ORDER BY timestamp ASC')
+      .all(outcome) as MarketTickRow[];
+  }
+  return db.prepare('SELECT * FROM market_ticks ORDER BY timestamp ASC')
+    .all() as MarketTickRow[];
+}
+
 // ============================================================================
 // Market Snapshot CRUD
 // ============================================================================
