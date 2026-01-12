@@ -301,8 +301,8 @@ export default function DataAnalysisPage() {
     }
   }, [viewAllSessions, allTicks.length, fetchAllTicks]);
 
-  // Filter and aggregate ticks into candles based on timeframe and date range
-  const candles = useMemo(() => {
+  // Filter ticks by view mode and date range
+  const filteredTicks = useMemo(() => {
     let ticksToUse = viewAllSessions ? allTicks : ticks;
 
     // Apply date range filter
@@ -316,25 +316,16 @@ export default function DataAnalysisPage() {
       });
     }
 
-    return aggregateTicksToCandles(ticksToUse, timeframe);
-  }, [ticks, allTicks, viewAllSessions, timeframe, startDate, endDate]);
+    return ticksToUse;
+  }, [ticks, allTicks, viewAllSessions, startDate, endDate]);
+
+  // Aggregate filtered ticks into candles
+  const candles = useMemo(() => {
+    return aggregateTicksToCandles(filteredTicks, timeframe);
+  }, [filteredTicks, timeframe]);
 
   // Count of filtered ticks for display
-  const filteredTickCount = useMemo(() => {
-    let ticksToUse = viewAllSessions ? allTicks : ticks;
-
-    if (startDate || endDate) {
-      const startTime = startDate ? new Date(startDate).getTime() : 0;
-      const endTime = endDate ? new Date(endDate).getTime() : Infinity;
-
-      ticksToUse = ticksToUse.filter((tick) => {
-        const tickTime = new Date(tick.timestamp).getTime();
-        return tickTime >= startTime && tickTime <= endTime;
-      });
-    }
-
-    return ticksToUse.length;
-  }, [ticks, allTicks, viewAllSessions, startDate, endDate]);
+  const filteredTickCount = filteredTicks.length;
 
   const isRecording = status?.state === "recording";
   const isDiscovering = status?.state === "discovering";
