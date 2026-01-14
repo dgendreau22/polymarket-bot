@@ -50,7 +50,7 @@ export async function GET(
           send('bot', botInstance);
         }
 
-        // Send current positions (for arbitrage bots, returns YES and NO positions)
+        // Send current positions (for dual-asset bots, returns YES and NO positions)
         const positionRows = getPositionsByBotId(id);
         const positions = positionRows.map(rowToPosition);
         send('positions', positions);
@@ -92,7 +92,7 @@ export async function GET(
               send('bot', botInstance);
             }
 
-            // Send updated positions (for arbitrage bots, returns YES and NO positions)
+            // Send updated positions (for dual-asset bots, returns YES and NO positions)
             const positionRows = getPositionsByBotId(id);
             const positions = positionRows.map(rowToPosition);
             send('positions', positions);

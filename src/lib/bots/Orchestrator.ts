@@ -501,7 +501,7 @@ class Orchestrator {
       marketId: market.marketId,
       marketName: market.marketName,
       assetId: market.assetId,
-      noAssetId: this.config.strategy === 'arbitrage' ? market.noAssetId : undefined,
+      noAssetId: market.noAssetId, // Always include if available (normalized dual-asset support)
       mode: this.config.mode,
       strategyConfig: this.config.strategyConfig,
     };

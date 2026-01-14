@@ -402,7 +402,7 @@ function fillSingleOrder(
  *
  * @param botId - The bot ID to check orders for
  * @param yesOrderBook - YES outcome order book
- * @param noOrderBook - NO outcome order book (optional, for arbitrage bots)
+ * @param noOrderBook - NO outcome order book (optional, for dual-asset bots)
  * @returns Array of fill results
  */
 export function fillMarketableOrders(

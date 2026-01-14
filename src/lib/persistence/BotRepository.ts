@@ -166,7 +166,7 @@ export function deleteBot(id: string): boolean {
 
 /**
  * Get or create position for a bot and asset
- * Now supports multiple positions per bot (e.g., YES and NO for arbitrage)
+ * Now supports multiple positions per bot (e.g., YES and NO for dual-asset bots)
  */
 export function getOrCreatePosition(
   botId: string,
@@ -241,13 +241,13 @@ export function getPosition(botId: string, assetId?: string): PositionRow | null
   if (assetId) {
     return db.prepare('SELECT * FROM positions WHERE bot_id = ? AND asset_id = ?').get(botId, assetId) as PositionRow | null;
   }
-  // Fallback: return first position (for backwards compatibility with non-arbitrage bots)
+  // Fallback: return first position (for backwards compatibility with single-asset bots)
   return db.prepare('SELECT * FROM positions WHERE bot_id = ?').get(botId) as PositionRow | null;
 }
 
 /**
  * Get all positions for a bot
- * Returns array of positions (for arbitrage bots with YES and NO positions)
+ * Returns array of positions (for dual-asset bots with YES and NO positions)
  */
 export function getPositionsByBotId(botId: string): PositionRow[] {
   const db = getDatabase();

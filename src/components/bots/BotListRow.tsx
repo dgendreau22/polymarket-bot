@@ -44,7 +44,8 @@ export function BotListRow({ bot, onStateChange }: BotListRowProps) {
   // Total PnL = realized + unrealized
   const pnl = realizedPnl + unrealizedPnl;
 
-  const isArbitrage = bot.config.strategySlug === 'arbitrage' || (yesSize > 0 && noSize > 0);
+  // Data-driven: show dual position format when both YES and NO have positions
+  const isDualPosition = yesSize > 0 && noSize > 0;
 
   const handleDelete = async () => {
     if (!confirm(`Are you sure you want to delete this ${strategyName} bot? This will also delete all associated trades.`)) {
@@ -74,7 +75,7 @@ export function BotListRow({ bot, onStateChange }: BotListRowProps) {
   const formatPosition = () => {
     if (totalSize === 0) return "—";
 
-    if (isArbitrage) {
+    if (isDualPosition) {
       return `${totalSize.toFixed(0)} (Y:${yesSize.toFixed(0)} N:${noSize.toFixed(0)})`;
     }
 

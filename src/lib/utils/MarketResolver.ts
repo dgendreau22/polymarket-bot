@@ -215,7 +215,7 @@ export function settlePosition(
 /**
  * Settle all positions for a bot at resolution prices.
  *
- * For arbitrage bots, this settles both YES and NO positions.
+ * For dual-asset bots, this settles both YES and NO positions.
  *
  * @param botId - Bot ID
  * @param resolution - Resolution result with winning outcome and prices

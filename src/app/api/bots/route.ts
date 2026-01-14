@@ -7,6 +7,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getBotManager } from '@/lib/bots';
+import { getExecutor } from '@/lib/strategies/registry';
 import type { BotMode, BotState } from '@/lib/bots/types';
 
 /**
@@ -94,12 +95,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Auto-fetch assetId from market if not provided
+    // Auto-fetch asset IDs from market if not provided
+    // All bots get both YES and NO asset IDs when available (normalized dual-asset support)
     let assetId = body.assetId;
     let noAssetId = body.noAssetId;
-    const isArbitrageStrategy = body.strategySlug === 'arbitrage';
 
-    if (!assetId || (isArbitrageStrategy && !noAssetId)) {
+    if (!assetId || !noAssetId) {
       try {
         // Fetch directly from Gamma API to avoid port mismatch issues
         const marketRes = await fetch(
@@ -115,8 +116,8 @@ export async function POST(request: NextRequest) {
               assetId = tokenIds[0]; // YES token
               console.log(`[API] Auto-assigned YES assetId: ${assetId}`);
             }
-            // For arbitrage strategy, also fetch NO token
-            if (isArbitrageStrategy && tokenIds.length > 1 && !noAssetId) {
+            // Always fetch NO token if market has two outcomes
+            if (!noAssetId && tokenIds.length > 1) {
               noAssetId = tokenIds[1]; // NO token
               console.log(`[API] Auto-assigned NO assetId: ${noAssetId}`);
             }
@@ -128,12 +129,17 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Validate arbitrage strategy has both asset IDs
-    if (isArbitrageStrategy && (!assetId || !noAssetId)) {
+    // Validate if strategy requires dual assets (determined by executor metadata, not strategy name)
+    const executor = getExecutor(body.strategySlug);
+    const requiresDualAssets = executor?.metadata.requiredAssets.some(
+      (a) => a.configKey === 'noAssetId'
+    );
+
+    if (requiresDualAssets && (!assetId || !noAssetId)) {
       return NextResponse.json(
         {
           success: false,
-          error: 'Arbitrage strategy requires both YES and NO asset IDs. Market may not have two outcomes.',
+          error: `Strategy '${body.strategySlug}' requires both YES and NO asset IDs. Market may not have two outcomes.`,
         },
         { status: 400 }
       );
@@ -146,7 +152,7 @@ export async function POST(request: NextRequest) {
       marketId: body.marketId,
       marketName: body.marketName,
       assetId,
-      noAssetId: isArbitrageStrategy ? noAssetId : undefined,
+      noAssetId, // Always include (may be undefined for single-outcome markets)
       mode: body.mode as BotMode,
       strategyConfig: body.strategyConfig,
     });

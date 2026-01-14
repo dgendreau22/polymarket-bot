@@ -69,10 +69,10 @@ class BotManager {
           updateBotState(record.id, 'stopped');
         }
 
-        // Restore positions - for arbitrage bots there may be multiple (YES and NO)
+        // Restore positions - for dual-asset bots there may be multiple (YES and NO)
         const positions = getPositionsByBotId(record.id);
         if (positions.length > 0) {
-          // For non-arbitrage bots, just use the first position
+          // For single-asset bots, just use the first position
           bot.setPosition(rowToPosition(positions[0]));
         } else {
           // Create initial position if none exists

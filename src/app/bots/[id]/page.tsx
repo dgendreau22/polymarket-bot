@@ -67,7 +67,7 @@ export default function BotDetailPage() {
   const [isConnected, setIsConnected] = useState(false);
   const [tickSize, setTickSize] = useState<string>("0.0001"); // Default 4 decimals
 
-  // Market data state (NO side - for arbitrage)
+  // Market data state (NO side - for dual-asset bots)
   const [noBestBid, setNoBestBid] = useState<string | null>(null);
   const [noBestAsk, setNoBestAsk] = useState<string | null>(null);
   const [noLastTrade, setNoLastTrade] = useState<LastTrade | null>(null);
@@ -386,7 +386,7 @@ export default function BotDetailPage() {
     }
   }, []);
 
-  // Fetch NO side order book (for arbitrage)
+  // Fetch NO side order book (for dual-asset bots)
   const fetchNoOrderBook = useCallback(async (assetId: string) => {
     try {
       const response = await fetch(`/api/orderbook?token_id=${encodeURIComponent(assetId)}`);
@@ -423,7 +423,7 @@ export default function BotDetailPage() {
     }
   }, []);
 
-  // Fetch NO side last trade price (for arbitrage)
+  // Fetch NO side last trade price (for dual-asset bots)
   const fetchNoLastTradePrice = useCallback(async (assetId: string) => {
     try {
       const response = await fetch(`/api/orderbook?token_id=${encodeURIComponent(assetId)}`);
@@ -553,10 +553,10 @@ export default function BotDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bot?.config.assetId]);
 
-  // NO side data subscription (for arbitrage bots)
+  // NO side data subscription (for all bots with noAssetId)
   useEffect(() => {
     const noAssetId = bot?.config.noAssetId;
-    if (!noAssetId || bot?.config.strategySlug !== 'arbitrage') return;
+    if (!noAssetId) return;
 
     // Fetch initial NO data
     fetchNoOrderBook(noAssetId);
@@ -609,7 +609,7 @@ export default function BotDetailPage() {
       ws.removeTradeCallback(noAssetId, noTradeCallback);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bot?.config.noAssetId, bot?.config.strategySlug]);
+  }, [bot?.config.noAssetId]);
 
   if (loading) {
     return (
@@ -636,11 +636,17 @@ export default function BotDetailPage() {
   }
 
   const strategyName = formatStrategyName(bot.config.strategySlug);
-  const isArbitrage = bot.config.strategySlug === 'arbitrage';
 
-  // For arbitrage bots, calculate total position from positions array (DB source)
-  // For non-arbitrage, use bot.position (in-memory)
-  const positionSize = isArbitrage
+  // Data-driven checks (not strategy-name based)
+  const hasNoAsset = Boolean(bot.config.noAssetId);
+  const yesPosition = positions.find(p => p.outcome === 'YES');
+  const noPosition = positions.find(p => p.outcome === 'NO');
+  const yesSize = parseFloat(yesPosition?.size || '0');
+  const noSize = parseFloat(noPosition?.size || '0');
+  const hasDualPositions = yesSize > 0 && noSize > 0;
+
+  // Calculate total position from positions array if available, otherwise use bot.position
+  const positionSize = positions.length > 0
     ? positions.reduce((sum, p) => sum + parseFloat(p.size), 0)
     : parseFloat(bot.position.size);
   // Calculate avg price using shared utility for consistency
@@ -778,11 +784,7 @@ export default function BotDetailPage() {
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
               <h2 className="font-semibold">Current Position</h2>
-              {bot.config.strategySlug === 'arbitrage' && positions.length > 0 && (() => {
-                const yesPos = positions.find(p => p.outcome === 'YES');
-                const noPos = positions.find(p => p.outcome === 'NO');
-                const yesSize = yesPos ? parseFloat(yesPos.size) : 0;
-                const noSize = noPos ? parseFloat(noPos.size) : 0;
+              {hasNoAsset && positions.length > 0 && (() => {
                 const matchedPairs = Math.min(yesSize, noSize);
                 const status = matchedPairs > 0 && yesSize === noSize ? 'complete' : (yesSize > 0 || noSize > 0) ? 'building' : 'closed';
                 return (
@@ -823,13 +825,12 @@ export default function BotDetailPage() {
               </button>
             )}
           </div>
-          {bot.config.strategySlug === 'arbitrage' && positions.length > 0 ? (
-            /* Arbitrage: Show YES and NO positions in table format */
+          {hasNoAsset && positions.length > 0 ? (
+            /* Dual-asset: Show YES and NO positions in table format */
             (() => {
-              const yesPosition = positions.find(p => p.outcome === 'YES');
-              const noPosition = positions.find(p => p.outcome === 'NO');
-              const upSize = yesPosition ? parseFloat(yesPosition.size) : 0;
-              const downSize = noPosition ? parseFloat(noPosition.size) : 0;
+              // Use already computed yesSize/noSize from above
+              const upSize = yesSize;
+              const downSize = noSize;
               const upAvg = yesPosition ? parseFloat(yesPosition.avgEntryPrice) : 0;
               const downAvg = noPosition ? parseFloat(noPosition.avgEntryPrice) : 0;
               const yesRealizedPnl = yesPosition ? parseFloat(yesPosition.realizedPnl) : 0;
@@ -978,7 +979,7 @@ export default function BotDetailPage() {
               );
             })()
           ) : positionSize > 0 ? (
-            /* Non-arbitrage: Single position row */
+            /* Single-asset: Single position row */
             <div className="overflow-x-auto">
               <table className="w-full text-sm table-fixed">
                 <thead>
@@ -1071,8 +1072,8 @@ export default function BotDetailPage() {
               <p className="text-muted-foreground text-sm">
                 No asset ID configured for this bot. Market data requires an asset ID.
               </p>
-            ) : bot.config.strategySlug === 'arbitrage' ? (
-              /* Arbitrage Layout: YES/NO side by side with order book below */
+            ) : hasNoAsset ? (
+              /* Dual-asset Layout: YES/NO side by side with order book below */
               <div className="flex-1 overflow-auto">
                 <div className="grid grid-cols-2 gap-4 mb-4">
                   {/* YES Side */}

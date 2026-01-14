@@ -48,7 +48,7 @@ export function calculateUnrealizedPnl(
 /**
  * Calculate average entry price from positions
  * - Single leg (YES or NO only): returns that leg's avg price
- * - Arbitrage (YES AND NO): returns sum of both avg prices (combined cost per pair)
+ * - Dual-asset (YES AND NO): returns sum of both avg prices (combined cost per pair)
  */
 export function calculateAvgPrice(positions: Position[]): number {
   const yesPos = positions.find(p => p.outcome === 'YES');
@@ -59,7 +59,7 @@ export function calculateAvgPrice(positions: Position[]): number {
   const yesAvg = yesPos ? parseFloat(yesPos.avgEntryPrice) : 0;
   const noAvg = noPos ? parseFloat(noPos.avgEntryPrice) : 0;
 
-  // If both YES and NO positions exist (arbitrage), return sum
+  // If both YES and NO positions exist (dual-asset), return sum
   if (yesSize > 0 && noSize > 0) {
     return yesAvg + noAvg;
   }

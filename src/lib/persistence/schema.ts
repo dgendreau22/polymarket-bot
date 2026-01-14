@@ -174,7 +174,7 @@ export function initializeSchema(db: Database.Database): void {
     // Column already exists, ignore
   }
 
-  // Migration: Add no_asset_id column to bots table for arbitrage strategies
+  // Migration: Add no_asset_id column to bots table for dual-asset trading
   try {
     db.exec(`ALTER TABLE bots ADD COLUMN no_asset_id TEXT`);
     console.log('[Schema] Added no_asset_id column to bots table');
@@ -182,7 +182,7 @@ export function initializeSchema(db: Database.Database): void {
     // Column already exists, ignore
   }
 
-  // Migration: Allow multiple positions per bot (for arbitrage YES/NO legs)
+  // Migration: Allow multiple positions per bot (for dual-asset YES/NO legs)
   // SQLite doesn't allow dropping constraints, so we need to recreate the table
   try {
     // Check if old table has UNIQUE on bot_id (by checking if we can create the new index)

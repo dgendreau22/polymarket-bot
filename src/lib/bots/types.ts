@@ -22,7 +22,7 @@ export interface BotConfig {
   marketId: string;
   marketName?: string;
   assetId?: string;
-  /** NO asset ID for arbitrage strategies */
+  /** NO asset ID for dual-asset trading */
   noAssetId?: string;
   mode: BotMode;
   strategyConfig?: Record<string, unknown>;
@@ -38,9 +38,9 @@ export interface BotInstance {
   updatedAt: Date;
   startedAt?: Date;
   stoppedAt?: Date;
-  /** Total position size summed from all positions (for arbitrage: YES + NO) */
+  /** Total position size summed from all positions (YES + NO for dual-asset bots) */
   totalPositionSize?: number;
-  /** All positions for this bot (YES and NO for arbitrage) */
+  /** All positions for this bot (YES and NO for dual-asset bots) */
   positions?: Position[];
   /** Market end/close time (from Gamma API) */
   marketEndTime?: Date;
@@ -54,7 +54,7 @@ export interface BotRow {
   market_id: string;
   market_name: string | null;
   asset_id: string | null;
-  /** NO asset ID for arbitrage strategies */
+  /** NO asset ID for dual-asset trading */
   no_asset_id: string | null;
   mode: BotMode;
   state: BotState;
@@ -271,20 +271,20 @@ export interface StrategyContext {
   pendingBuyQuantity?: number;
   /** Total quantity of pending SELL orders (not yet filled) */
   pendingSellQuantity?: number;
-  /** Pending BUY quantity for YES asset (arbitrage) */
+  /** Pending BUY quantity for YES asset (dual-asset bots) */
   yesPendingBuy?: number;
-  /** Pending BUY quantity for NO asset (arbitrage) */
+  /** Pending BUY quantity for NO asset (dual-asset bots) */
   noPendingBuy?: number;
   /** Weighted average price of pending YES BUY orders */
   yesPendingAvgPrice?: number;
   /** Weighted average price of pending NO BUY orders */
   noPendingAvgPrice?: number;
-  // Multi-asset fields (for arbitrage and other multi-leg strategies)
-  /** All positions for this bot (YES and NO for arbitrage) */
+  // Multi-asset fields (for dual-asset and other multi-leg strategies)
+  /** All positions for this bot (YES and NO for dual-asset bots) */
   positions?: Position[];
-  /** NO asset ID for arbitrage strategies */
+  /** NO asset ID for dual-asset trading */
   noAssetId?: string;
-  /** NO side order book for arbitrage strategies */
+  /** NO side order book for dual-asset bots */
   noOrderBook?: OrderBook;
   /** YES side best bid/ask prices */
   yesPrices?: { bestBid: number; bestAsk: number };
