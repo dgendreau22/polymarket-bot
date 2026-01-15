@@ -6,6 +6,7 @@
 
 import { NextResponse } from "next/server";
 import { getGammaClient } from "@/lib/polymarket";
+import { error } from '@/lib/logger';
 
 export async function GET(request: Request) {
   try {
@@ -82,12 +83,12 @@ export async function GET(request: Request) {
       },
       count: markets.length,
     });
-  } catch (error) {
-    console.error("[API] Failed to search markets:", error);
+  } catch (err) {
+    error('API', 'Failed to search markets:', err);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
+        error: err instanceof Error ? err.message : "Unknown error",
       },
       { status: 500 }
     );

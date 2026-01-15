@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getBotManager } from '@/lib/bots';
+import { error } from '@/lib/logger';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -51,12 +52,12 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       data: updatedBot,
       message: 'Bot resumed successfully',
     });
-  } catch (error) {
-    console.error('[API] POST /api/bots/[id]/resume error:', error);
+  } catch (err) {
+    error('API', 'POST /api/bots/[id]/resume error:', err);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to resume bot',
+        error: err instanceof Error ? err.message : 'Failed to resume bot',
       },
       { status: 500 }
     );

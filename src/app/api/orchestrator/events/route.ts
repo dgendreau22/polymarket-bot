@@ -7,6 +7,7 @@
 import { NextRequest } from 'next/server';
 import { getOrchestrator } from '@/lib/bots/Orchestrator';
 import type { OrchestratorEvent } from '@/lib/bots/Orchestrator';
+import { error } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,7 +24,7 @@ export async function GET(request: NextRequest) {
           const message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
           controller.enqueue(encoder.encode(message));
         } catch (err) {
-          console.error('[Orchestrator SSE] Failed to send message:', err);
+          error('API', 'Orchestrator SSE Failed to send message:', err);
         }
       };
 

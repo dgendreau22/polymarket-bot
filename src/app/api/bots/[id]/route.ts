@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getBotManager } from '@/lib/bots';
 import { getPosition, rowToPosition } from '@/lib/persistence/BotRepository';
+import { log, error } from '@/lib/logger';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -35,24 +36,24 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     // Fetch position from database to ensure we have the latest
     const dbPosition = getPosition(id);
-    console.log(`[API GET /bots/${id}] dbPosition:`, dbPosition);
+    log('API', `GET /bots/${id} dbPosition:`, dbPosition);
     if (dbPosition) {
       const position = rowToPosition(dbPosition);
-      console.log(`[API GET /bots/${id}] Converted position:`, position);
+      log('API', `GET /bots/${id} Converted position:`, position);
       bot.position = position;
     }
-    console.log(`[API GET /bots/${id}] Final bot.position:`, bot.position);
+    log('API', `GET /bots/${id} Final bot.position:`, bot.position);
 
     return NextResponse.json({
       success: true,
       data: bot,
     });
-  } catch (error) {
-    console.error('[API] GET /api/bots/[id] error:', error);
+  } catch (err) {
+    error('API', 'GET /api/bots/[id] error:', err);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to fetch bot',
+        error: err instanceof Error ? err.message : 'Failed to fetch bot',
       },
       { status: 500 }
     );
@@ -86,12 +87,12 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
       success: true,
       message: 'Bot deleted successfully',
     });
-  } catch (error) {
-    console.error('[API] DELETE /api/bots/[id] error:', error);
+  } catch (err) {
+    error('API', 'DELETE /api/bots/[id] error:', err);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to delete bot',
+        error: err instanceof Error ? err.message : 'Failed to delete bot',
       },
       { status: 500 }
     );

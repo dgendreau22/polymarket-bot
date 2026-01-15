@@ -5,6 +5,7 @@
  */
 
 import { getDatabase } from './database';
+import { log } from '@/lib/logger';
 import type { LimitOrder, LimitOrderRow, LimitOrderStatus } from '../bots/types';
 
 // ============================================================================
@@ -190,8 +191,9 @@ export function cancelStaleOrders(
           ? `age=${orderAgeSeconds.toFixed(0)}s`
           : `distance=${(priceDistance * 100).toFixed(1)}%`;
 
-      console.log(
-        `[OrderManager] Cancelled stale ${order.side} order ${order.id.slice(0, 8)}... @ ${order.price} (${reason})`
+      log(
+        'OrderManager',
+        `Cancelled stale ${order.side} order ${order.id.slice(0, 8)}... @ ${order.price} (${reason})`
       );
     }
   }
@@ -246,8 +248,9 @@ export function cancelStaleOrdersForOutcome(
           ? `age=${orderAgeSeconds.toFixed(0)}s`
           : `distance=${(priceDistance * 100).toFixed(1)}%`;
 
-      console.log(
-        `[OrderManager] Cancelled stale ${outcome} ${order.side} order ${order.id.slice(0, 8)}... @ ${order.price} (${reason})`
+      log(
+        'OrderManager',
+        `Cancelled stale ${outcome} ${order.side} order ${order.id.slice(0, 8)}... @ ${order.price} (${reason})`
       );
     }
   }

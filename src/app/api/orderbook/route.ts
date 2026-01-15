@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { error } from '@/lib/logger';
 
 const CLOB_HOST = process.env.POLYMARKET_CLOB_HOST || "https://clob.polymarket.com";
 
@@ -37,12 +38,12 @@ export async function GET(request: Request) {
       data: orderBook,
       timestamp: Date.now(),
     });
-  } catch (error) {
-    console.error("[API] Error fetching order book:", error);
+  } catch (err) {
+    error('API', 'Error fetching order book:', err);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : "Failed to fetch order book",
+        error: err instanceof Error ? err.message : "Failed to fetch order book",
       },
       { status: 500 }
     );

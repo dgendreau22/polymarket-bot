@@ -8,6 +8,7 @@ import { NextResponse } from 'next/server';
 import { loadAllStrategies } from '@/lib/strategies';
 import { getBotManager } from '@/lib/bots';
 import { getStrategyTradeStats } from '@/lib/persistence';
+import { error } from '@/lib/logger';
 
 /**
  * GET /api/strategies
@@ -41,12 +42,12 @@ export async function GET() {
       data: strategiesWithStats,
       count: strategiesWithStats.length,
     });
-  } catch (error) {
-    console.error('[API] GET /api/strategies error:', error);
+  } catch (err) {
+    error('API', 'GET /api/strategies error:', err);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to fetch strategies',
+        error: err instanceof Error ? err.message : 'Failed to fetch strategies',
       },
       { status: 500 }
     );

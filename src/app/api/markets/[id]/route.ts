@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { error } from '@/lib/logger';
 
 export async function GET(
   request: Request,
@@ -41,12 +42,12 @@ export async function GET(
       success: true,
       data: market,
     });
-  } catch (error) {
-    console.error("[API] Error fetching market:", error);
+  } catch (err) {
+    error('API', 'Error fetching market:', err);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : "Failed to fetch market",
+        error: err instanceof Error ? err.message : "Failed to fetch market",
       },
       { status: 500 }
     );

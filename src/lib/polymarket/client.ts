@@ -9,6 +9,7 @@ import { GammaSDK } from "@hk/polymarket";
 import { ClobClient } from "@polymarket/clob-client";
 import { Wallet } from "@ethersproject/wallet";
 import type { PolymarketConfig } from "./types";
+import { log, warn, error } from "@/lib/logger";
 
 // Environment configuration with defaults
 const config: PolymarketConfig = {
@@ -51,13 +52,14 @@ export async function initializeClobClient(): Promise<ClobClient> {
   const wallet = new Wallet(config.privateKey);
   const derivedAddress = await wallet.getAddress();
 
-  console.log(`[CLOB] Wallet address derived from private key: ${derivedAddress}`);
-  console.log(`[CLOB] Configured funder address: ${config.funderAddress}`);
+  log('CLOB', `Wallet address derived from private key: ${derivedAddress}`);
+  log('CLOB', `Configured funder address: ${config.funderAddress}`);
 
   // Warn if addresses don't match
   if (derivedAddress.toLowerCase() !== config.funderAddress.toLowerCase()) {
-    console.warn(
-      `[CLOB] WARNING: Derived wallet address (${derivedAddress}) does not match ` +
+    warn(
+      'CLOB',
+      `WARNING: Derived wallet address (${derivedAddress}) does not match ` +
       `funder address (${config.funderAddress}). This may cause authentication issues.`
     );
   }
@@ -75,9 +77,9 @@ export async function initializeClobClient(): Promise<ClobClient> {
   try {
     // Derive API credentials for authenticated requests
     apiCreds = await tempClient.createOrDeriveApiKey();
-    console.log("[CLOB] API credentials derived successfully");
-  } catch (error) {
-    console.error("[CLOB] Failed to derive API credentials:", error);
+    log('CLOB', 'API credentials derived successfully');
+  } catch (err) {
+    error('CLOB', 'Failed to derive API credentials:', err);
     throw new Error(
       `Failed to derive API credentials. Make sure the private key is for an account ` +
       `that has been registered with Polymarket. Derived address: ${derivedAddress}`

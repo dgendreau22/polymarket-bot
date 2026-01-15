@@ -7,6 +7,7 @@
 import fs from 'fs';
 import path from 'path';
 import matter from 'gray-matter';
+import { log, warn, error } from '@/lib/logger';
 import type { StrategyDefinition, StrategyParameter, RiskManagementRules } from '../bots/types';
 
 const STRATEGIES_DIR = path.join(process.cwd(), 'src', 'strategies');
@@ -37,8 +38,8 @@ export function parseStrategyFile(filePath: string): StrategyDefinition | null {
       riskManagement,
       author: frontmatter.author,
     };
-  } catch (error) {
-    console.error(`[StrategyLoader] Failed to parse ${filePath}:`, error);
+  } catch (err) {
+    error('StrategyLoader', `Failed to parse ${filePath}:`, err);
     return null;
   }
 }
@@ -160,7 +161,7 @@ export function loadAllStrategies(): StrategyDefinition[] {
   const strategies: StrategyDefinition[] = [];
 
   if (!fs.existsSync(STRATEGIES_DIR)) {
-    console.warn(`[StrategyLoader] Strategies directory not found: ${STRATEGIES_DIR}`);
+    warn('StrategyLoader', `Strategies directory not found: ${STRATEGIES_DIR}`);
     return strategies;
   }
 
@@ -175,7 +176,7 @@ export function loadAllStrategies(): StrategyDefinition[] {
     }
   }
 
-  console.log(`[StrategyLoader] Loaded ${strategies.length} strategies`);
+  log('StrategyLoader', `Loaded ${strategies.length} strategies`);
   return strategies;
 }
 
@@ -186,7 +187,7 @@ export function loadStrategy(slug: string): StrategyDefinition | null {
   const filePath = path.join(STRATEGIES_DIR, `${slug}.md`);
 
   if (!fs.existsSync(filePath)) {
-    console.warn(`[StrategyLoader] Strategy not found: ${slug}`);
+    warn('StrategyLoader', `Strategy not found: ${slug}`);
     return null;
   }
 

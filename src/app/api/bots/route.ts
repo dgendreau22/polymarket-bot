@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getBotManager } from '@/lib/bots';
 import { getExecutor } from '@/lib/strategies/registry';
 import type { BotMode, BotState } from '@/lib/bots/types';
+import { log, warn, error } from '@/lib/logger';
 
 /**
  * GET /api/bots
@@ -33,12 +34,12 @@ export async function GET(request: NextRequest) {
       data: bots,
       count: bots.length,
     });
-  } catch (error) {
-    console.error('[API] GET /api/bots error:', error);
+  } catch (err) {
+    error('API', 'GET /api/bots error:', err);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to fetch bots',
+        error: err instanceof Error ? err.message : 'Failed to fetch bots',
       },
       { status: 500 }
     );
@@ -114,17 +115,17 @@ export async function POST(request: NextRequest) {
           if (tokenIds && tokenIds.length > 0) {
             if (!assetId) {
               assetId = tokenIds[0]; // YES token
-              console.log(`[API] Auto-assigned YES assetId: ${assetId}`);
+              log('API', `Auto-assigned YES assetId: ${assetId}`);
             }
             // Always fetch NO token if market has two outcomes
             if (!noAssetId && tokenIds.length > 1) {
               noAssetId = tokenIds[1]; // NO token
-              console.log(`[API] Auto-assigned NO assetId: ${noAssetId}`);
+              log('API', `Auto-assigned NO assetId: ${noAssetId}`);
             }
           }
         }
-      } catch (err) {
-        console.warn('[API] Failed to fetch market for assetId:', err);
+      } catch (fetchErr) {
+        warn('API', 'Failed to fetch market for assetId:', fetchErr);
         // Continue without assetId - bot will work but without live market data
       }
     }
@@ -161,12 +162,12 @@ export async function POST(request: NextRequest) {
       success: true,
       data: bot,
     });
-  } catch (error) {
-    console.error('[API] POST /api/bots error:', error);
+  } catch (err) {
+    error('API', 'POST /api/bots error:', err);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to create bot',
+        error: err instanceof Error ? err.message : 'Failed to create bot',
       },
       { status: 500 }
     );

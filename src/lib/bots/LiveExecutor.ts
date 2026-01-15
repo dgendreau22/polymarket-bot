@@ -5,6 +5,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import { log, error } from '@/lib/logger';
 import type { Trade, StrategySignal, TradeExecutionResult } from './types';
 import type { Bot } from './Bot';
 import { getClobClient, hasCredentials } from '../polymarket/client';
@@ -31,8 +32,9 @@ export async function executeLiveTrade(
     // Create order through CLOB client
     // Note: This is a simplified implementation. The actual CLOB API
     // requires more complex order construction and signing.
-    console.log(
-      `[Live] Placing order: ${signal.action} ${signal.quantity} ${signal.side} @ ${signal.price}`
+    log(
+      'Live',
+      `Placing order: ${signal.action} ${signal.quantity} ${signal.side} @ ${signal.price}`
     );
 
     // TODO: Implement actual order placement through ClobClient
@@ -64,16 +66,16 @@ export async function executeLiveTrade(
       createdAt: now,
     };
 
-    console.log(`[Live] Order placed: ${trade.id}`);
+    log('Live', `Order placed: ${trade.id}`);
 
     return {
       success: true,
       trade,
       // orderId: order.id,
     };
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error(`[Live] Execution failed:`, errorMessage);
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+    error('Live', 'Execution failed:', errorMessage);
 
     return {
       success: false,
@@ -93,7 +95,7 @@ export function createLiveExecutor(): (bot: Bot, signal: StrategySignal) => Prom
       return result.trade;
     }
 
-    console.error(`[Live] Trade failed: ${result.error}`);
+    error('Live', `Trade failed: ${result.error}`);
     return null;
   };
 }

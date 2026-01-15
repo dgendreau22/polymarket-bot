@@ -11,6 +11,7 @@ import { getBotManager } from './BotManager';
 import { getGammaClient } from '../polymarket/client';
 import { getETOffsetMinutes, formatTime12Hour } from '../utils/time';
 import type { BotConfig, BotMode, BotEvent } from './types';
+import { log, error } from '@/lib/logger';
 
 // ============================================================================
 // Types
@@ -133,7 +134,7 @@ class Orchestrator {
     this.runningBotIds.clear();
     this.setState('searching');
 
-    console.log(`[Orchestrator] Starting with strategy=${this.config.strategy}, mode=${this.config.mode}, leadTime=${this.config.leadTimeMinutes}min`);
+    log('Orchestrator', `Starting with strategy=${this.config.strategy}, mode=${this.config.mode}, leadTime=${this.config.leadTimeMinutes}min`);
 
     // Begin market discovery
     await this.findAndScheduleNextMarket();
@@ -150,7 +151,7 @@ class Orchestrator {
    * Stop the orchestrator
    */
   async stop(): Promise<void> {
-    console.log('[Orchestrator] Stopping...');
+    log('Orchestrator', 'Stopping...');
 
     this.config.enabled = false;
 
@@ -170,7 +171,7 @@ class Orchestrator {
     this.scheduledMarketIds.clear();
     this.setState('idle');
 
-    console.log('[Orchestrator] Stopped');
+    log('Orchestrator', 'Stopped');
   }
 
   /**
@@ -254,19 +255,19 @@ class Orchestrator {
           return;
         }
 
-        console.log(`[Orchestrator] Found new market to schedule: ${market.marketName}`);
-        console.log(`[Orchestrator] Market starts at: ${market.startTime.toLocaleString()}`);
+        log('Orchestrator', `Found new market to schedule: ${market.marketName}`);
+        log('Orchestrator', `Market starts at: ${market.startTime.toLocaleString()}`);
 
         this.emitEvent({ type: 'MARKET_FOUND', market, timestamp: new Date() });
         await this.scheduleBot(market);
       } else if (this.runningBotIds.size === 0 && !this.nextScheduledMarket) {
         // Only show searching state if nothing is running or scheduled
-        console.log('[Orchestrator] No upcoming market found, will retry...');
+        log('Orchestrator', 'No upcoming market found, will retry...');
         this.setState('searching');
       }
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-      console.error('[Orchestrator] Error finding market:', errorMsg);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      error('Orchestrator', 'Error finding market:', errorMsg);
       this.lastError = errorMsg;
       // Don't set error state if we have running bots - just log the error
       if (this.runningBotIds.size === 0) {
@@ -286,7 +287,7 @@ class Orchestrator {
     const nowMs = now.getTime();
     const MIN_REMAINING_MS = 2 * 60 * 1000; // Need at least 2 minutes remaining to join
 
-    console.log(`[Orchestrator] Searching for markets at ${now.toLocaleString()} (UTC: ${now.toISOString()})`);
+    log('Orchestrator', `Searching for markets at ${now.toLocaleString()} (UTC: ${now.toISOString()})`);
 
     // Calculate the next few 15-minute slot timestamps
     // Markets are at :00, :15, :30, :45 of each hour
@@ -298,7 +299,7 @@ class Orchestrator {
 
       // Skip if already scheduled
       if (this.scheduledMarketIds.has(eventSlug)) {
-        console.log(`[Orchestrator] Skipping slot ${startTimeET}: already scheduled`);
+        log('Orchestrator', `Skipping slot ${startTimeET}: already scheduled`);
         continue;
       }
 
@@ -306,12 +307,12 @@ class Orchestrator {
       const endTimeMs = (timestamp + 15 * 60) * 1000; // 15 minutes after start
       const timeUntilEnd = endTimeMs - nowMs;
       if (timeUntilEnd < MIN_REMAINING_MS) {
-        console.log(`[Orchestrator] Skipping slot ${startTimeET}: ends in ${Math.round(timeUntilEnd/1000)}s`);
+        log('Orchestrator', `Skipping slot ${startTimeET}: ends in ${Math.round(timeUntilEnd/1000)}s`);
         continue;
       }
 
       try {
-        console.log(`[Orchestrator] Trying event slug: ${eventSlug} (${startTimeET}-${endTimeET} ET)`);
+        log('Orchestrator', `Trying event slug: ${eventSlug} (${startTimeET}-${endTimeET} ET)`);
         const event = await gamma.getEventBySlug(eventSlug);
 
         if (event && event.markets && event.markets.length > 0) {
@@ -324,9 +325,9 @@ class Orchestrator {
           const startTime = new Date(timestamp * 1000);
           const endTime = new Date((timestamp + 15 * 60) * 1000);
 
-          console.log(`[Orchestrator] Found market: ${marketName}`);
-          console.log(`  -> Market ID: ${marketId}`);
-          console.log(`  -> Start: ${startTime.toLocaleString()} | End: ${endTime.toLocaleString()}`);
+          log('Orchestrator', `Found market: ${marketName}`);
+          log('Orchestrator', `  -> Market ID: ${marketId}`);
+          log('Orchestrator', `  -> Start: ${startTime.toLocaleString()} | End: ${endTime.toLocaleString()}`);
 
           // Track by event slug to avoid duplicate lookups
           this.scheduledMarketIds.add(eventSlug);
@@ -340,15 +341,15 @@ class Orchestrator {
             noAssetId: tokenIds[1],
           };
         } else {
-          console.log(`[Orchestrator] No market found for slug: ${eventSlug}`);
+          log('Orchestrator', `No market found for slug: ${eventSlug}`);
         }
-      } catch (error) {
+      } catch {
         // Event doesn't exist yet, try next slot
-        console.log(`[Orchestrator] Event not found: ${eventSlug}`);
+        log('Orchestrator', `Event not found: ${eventSlug}`);
       }
     }
 
-    console.log('[Orchestrator] No upcoming 15-min markets found in next 2 hours');
+    log('Orchestrator', 'No upcoming 15-min markets found in next 2 hours');
     return null;
   }
 
@@ -451,7 +452,7 @@ class Orchestrator {
 
     if (delayMs <= 0) {
       // Bot start time has passed, create bot now
-      console.log('[Orchestrator] Bot start time reached, creating bot immediately');
+      log('Orchestrator', 'Bot start time reached, creating bot immediately');
       await this.createBot(market);
       return;
     }
@@ -476,7 +477,7 @@ class Orchestrator {
 
     const delaySeconds = Math.round(delayMs / 1000);
     const delayMinutes = Math.floor(delayMs / 60000);
-    console.log(`[Orchestrator] Bot for ${this.extractTimeWindow(market.marketName)} scheduled to start at ${botStartTime.toLocaleString()} (in ${delayMinutes}m ${delaySeconds % 60}s)`);
+    log('Orchestrator', `Bot for ${this.extractTimeWindow(market.marketName)} scheduled to start at ${botStartTime.toLocaleString()} (in ${delayMinutes}m ${delaySeconds % 60}s)`);
 
     // Clear any existing timer before setting a new one
     if (this.nextScheduledTimer) {
@@ -506,7 +507,7 @@ class Orchestrator {
       strategyConfig: this.config.strategyConfig,
     };
 
-    console.log(`[Orchestrator] Creating bot for market: ${market.marketName}`);
+    log('Orchestrator', `Creating bot for market: ${market.marketName}`);
 
     // Create and start bot
     const botInstance = botManager.createBot(botConfig);
@@ -550,7 +551,7 @@ class Orchestrator {
       this.botHistory = this.botHistory.slice(0, 50);
     }
 
-    console.log(`[Orchestrator] Bot created and started: ${botId}`);
+    log('Orchestrator', `Bot created and started: ${botId}`);
 
     // Monitor for market close
     this.monitorBotForCycle(botId, market);
@@ -570,7 +571,7 @@ class Orchestrator {
     const bot = botManager.getBotRaw(botId);
 
     if (!bot) {
-      console.error(`[Orchestrator] Could not find bot ${botId} for monitoring`);
+      error('Orchestrator', `Could not find bot ${botId} for monitoring`);
       return;
     }
 
@@ -585,7 +586,7 @@ class Orchestrator {
         bot.offEvent(handler);
         clearInterval(updateInterval);
 
-        console.log(`[Orchestrator] Bot ${botId} stopped, updating history...`);
+        log('Orchestrator', `Bot ${botId} stopped, updating history...`);
 
         // Remove from running bots
         this.runningBotIds.delete(botId);
@@ -670,8 +671,8 @@ class Orchestrator {
     for (const handler of this.eventHandlers) {
       try {
         handler(event);
-      } catch (error) {
-        console.error('[Orchestrator] Event handler error:', error);
+      } catch (err) {
+        error('Orchestrator', 'Event handler error:', err);
       }
     }
   }

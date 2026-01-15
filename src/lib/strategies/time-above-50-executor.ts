@@ -10,6 +10,7 @@
  * - Risk controls: spread gates, time flatten, hysteresis
  */
 
+import { log } from '@/lib/logger';
 import type {
   IStrategyExecutor,
   StrategyContext,
@@ -97,7 +98,7 @@ export class TimeAbove50Executor implements IStrategyExecutor {
     // 2. Calculate consensus price from YES/NO books
     const consensus = this.consensusCalculator.calculate(yesPrices, noPrices);
     if (!consensus.isValid) {
-      console.log(`[TimeAbove50] ${botId}: Missing order book data, skipping cycle`);
+      log('TimeAbove50', `${botId}: Missing order book data, skipping cycle`);
       return null;
     }
 
@@ -139,8 +140,9 @@ export class TimeAbove50Executor implements IStrategyExecutor {
     // Log state every cycle for monitoring
     const shortId = botId.slice(0, 8);
     const direction = exposure.q_star > 0 ? 'YES' : exposure.q_star < 0 ? 'NO' : 'FLAT';
-    console.log(
-      `[TA50 ${shortId}] p=${consensus.consensusPrice.toFixed(3)} | ` +
+    log(
+      `TA50 ${shortId}`,
+      `p=${consensus.consensusPrice.toFixed(3)} | ` +
       `E=${signal.E >= 0 ? '+' : ''}${signal.E.toFixed(3)} | ` +
       `q*=${exposure.q_star >= 0 ? '+' : ''}${exposure.q_star.toFixed(0)} (${direction}) | ` +
       `pos: YES=${inv_yes.toFixed(0)} NO=${inv_no.toFixed(0)} | ` +
@@ -153,7 +155,7 @@ export class TimeAbove50Executor implements IStrategyExecutor {
       exposure.isExpanding
     );
     if (!spreadCheck.allowed) {
-      console.log(`[TimeAbove50] ${botId}: ${spreadCheck.reason}`);
+      log('TimeAbove50', `${botId}: ${spreadCheck.reason}`);
       return null;
     }
 
@@ -173,7 +175,7 @@ export class TimeAbove50Executor implements IStrategyExecutor {
       now
     );
     if (!holdCheck.allowed) {
-      console.log(`[TimeAbove50] ${botId}: ${holdCheck.reason}`);
+      log('TimeAbove50', `${botId}: ${holdCheck.reason}`);
       return null;
     }
 
@@ -182,7 +184,7 @@ export class TimeAbove50Executor implements IStrategyExecutor {
 
     // 12. Validate price data before signal creation
     if (!yesPrices || !noPrices) {
-      console.log(`[TimeAbove50] ${botId}: Missing price data for signal creation`);
+      log('TimeAbove50', `${botId}: Missing price data for signal creation`);
       return null;
     }
 
@@ -190,8 +192,9 @@ export class TimeAbove50Executor implements IStrategyExecutor {
     const tick = tickSize ? parseFloat(tickSize.tick_size) : 0.01;
 
     // Log the action being taken
-    console.log(
-      `[TA50 ${shortId}] >>> ACTION: ${action.side} ${action.quantity.toFixed(0)} ${action.outcome} ` +
+    log(
+      `TA50 ${shortId}`,
+      `>>> ACTION: ${action.side} ${action.quantity.toFixed(0)} ${action.outcome} ` +
       `(${action.isUnwind ? 'UNWIND' : 'BUILD'})`
     );
 

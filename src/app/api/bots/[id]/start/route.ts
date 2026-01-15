@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getBotManager } from '@/lib/bots';
+import { error } from '@/lib/logger';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -51,12 +52,12 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       data: updatedBot,
       message: 'Bot started successfully',
     });
-  } catch (error) {
-    console.error('[API] POST /api/bots/[id]/start error:', error);
+  } catch (err) {
+    error('API', 'POST /api/bots/[id]/start error:', err);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to start bot',
+        error: err instanceof Error ? err.message : 'Failed to start bot',
       },
       { status: 500 }
     );

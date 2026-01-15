@@ -5,6 +5,7 @@
  * Earns the spread when both sides fill.
  */
 
+import { warn } from '@/lib/logger';
 import type { IStrategyExecutor, StrategyContext, StrategySignal, ExecutorMetadata } from '../bots/types';
 
 export class MarketMakerExecutor implements IStrategyExecutor {
@@ -68,7 +69,7 @@ export class MarketMakerExecutor implements IStrategyExecutor {
 
       // Safety check: ensure order is not marketable
       if (parseFloat(bidPrice) >= bestAsk) {
-        console.warn(`[MM] Skipping BUY - price ${bidPrice} would be marketable (ask=${bestAsk})`);
+        warn('MM', `Skipping BUY - price ${bidPrice} would be marketable (ask=${bestAsk})`);
         return null;
       }
 
@@ -89,7 +90,7 @@ export class MarketMakerExecutor implements IStrategyExecutor {
 
       // Safety check: ensure order is not marketable
       if (parseFloat(askPrice) <= bestBid) {
-        console.warn(`[MM] Skipping SELL - price ${askPrice} would be marketable (bid=${bestBid})`);
+        warn('MM', `Skipping SELL - price ${askPrice} would be marketable (bid=${bestBid})`);
         return null;
       }
 

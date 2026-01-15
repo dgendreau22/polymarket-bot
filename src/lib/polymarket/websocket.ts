@@ -5,6 +5,7 @@
  * Essential for market making and arbitrage strategies.
  */
 
+import { log, error } from '@/lib/logger';
 import type { OrderBook, OrderBookEntry, LastTrade, TickSize } from "./types";
 
 type OrderBookCallback = (orderBook: OrderBook) => void;
@@ -73,7 +74,7 @@ export class PolymarketWebSocket {
         this.ws = new WebSocket(this.config.url);
 
         this.ws.onopen = () => {
-          console.log("[WS] Connected to Polymarket");
+          log('WS', 'Connected to Polymarket');
           this.isConnecting = false;
           this.reconnectAttempts = 0;
           this.resubscribeAll();
@@ -84,8 +85,8 @@ export class PolymarketWebSocket {
           this.handleMessage(event.data);
         };
 
-        this.ws.onerror = (error) => {
-          console.error("[WS] Error:", error);
+        this.ws.onerror = (err) => {
+          error('WS', 'Error:', err);
           this.isConnecting = false;
           if (this.onError) {
             this.onError(new Error("WebSocket error"));
@@ -93,7 +94,7 @@ export class PolymarketWebSocket {
         };
 
         this.ws.onclose = () => {
-          console.log("[WS] Connection closed");
+          log('WS', 'Connection closed');
           this.isConnecting = false;
           this.attemptReconnect();
         };
@@ -267,7 +268,7 @@ export class PolymarketWebSocket {
       assets_ids: assetIds,
       type: "market",
     };
-    console.log("[WS] Sending subscription:", subscriptionMsg);
+    log('WS', 'Sending subscription:', subscriptionMsg);
     this.ws.send(JSON.stringify(subscriptionMsg));
   }
 
@@ -364,8 +365,8 @@ export class PolymarketWebSocket {
           callback(tickSize);
         }
       }
-    } catch (error) {
-      console.error("[WS] Failed to parse message:", error);
+    } catch (err) {
+      error('WS', 'Failed to parse message:', err);
     }
   }
 
@@ -405,7 +406,7 @@ export class PolymarketWebSocket {
     }
 
     if (this.reconnectAttempts >= this.config.maxReconnectAttempts) {
-      console.error("[WS] Max reconnection attempts reached");
+      error('WS', 'Max reconnection attempts reached');
       if (this.onError) {
         this.onError(new Error("Max reconnection attempts reached"));
       }
@@ -413,13 +414,14 @@ export class PolymarketWebSocket {
     }
 
     this.reconnectAttempts++;
-    console.log(
-      `[WS] Reconnecting in ${this.config.reconnectInterval}ms (attempt ${this.reconnectAttempts}/${this.config.maxReconnectAttempts})`
+    log(
+      'WS',
+      `Reconnecting in ${this.config.reconnectInterval}ms (attempt ${this.reconnectAttempts}/${this.config.maxReconnectAttempts})`
     );
 
     setTimeout(() => {
-      this.connect().catch((error) => {
-        console.error("[WS] Reconnection failed:", error);
+      this.connect().catch((err) => {
+        error('WS', 'Reconnection failed:', err);
       });
     }, this.config.reconnectInterval);
   }

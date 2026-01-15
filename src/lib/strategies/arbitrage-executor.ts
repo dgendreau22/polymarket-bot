@@ -13,6 +13,7 @@
  * 6. Profit-taking: Sell leading leg when imbalanced and price is favorable
  */
 
+import { log } from '@/lib/logger';
 import type { IStrategyExecutor, StrategyContext, StrategySignal, ExecutorMetadata } from '../bots/types';
 import type { OrderBook } from '../polymarket/types';
 
@@ -121,7 +122,7 @@ export class ArbitrageExecutor implements IStrategyExecutor {
     // 2. Extract market data
     const marketData = extractMarketData(orderBook, noOrderBook, yesPrices, noPrices);
     if (!marketData.isValid) {
-      console.log(`[Arb] Missing order book data, skipping cycle`);
+      log('Arb', 'Missing order book data, skipping cycle');
       return null;
     }
 

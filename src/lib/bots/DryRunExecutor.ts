@@ -10,6 +10,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import { log, error } from '@/lib/logger';
 import type { Trade, StrategySignal, TradeExecutionResult, LimitOrder, BotEvent } from './types';
 import type { Bot } from './Bot';
 import type { OrderBook } from '../polymarket/types';
@@ -94,8 +95,9 @@ export async function executeDryRunTrade(
     // For marketable orders, fill immediately and create a trade
     if (isMarketable) {
       updateOrderFill(orderId, signal.quantity, 'filled');
-      console.log(
-        `[DryRun] Marketable order filled immediately: ${side} ${signal.quantity} @ ${fillPrice} (limit was ${signal.price})`
+      log(
+        'DryRun',
+        `Marketable order filled immediately: ${side} ${signal.quantity} @ ${fillPrice} (limit was ${signal.price})`
       );
 
       // Calculate PnL and update position
@@ -128,7 +130,7 @@ export async function executeDryRunTrade(
           realizedPnl: newRealizedPnl.toFixed(6),
         });
 
-        console.log(`[DryRun] SELL: ${fillQuantity} @ ${fillPrice} | PnL: ${pnl.toFixed(4)} | Position: ${currentSize} -> ${update.newSize}`);
+        log('DryRun', `SELL: ${fillQuantity} @ ${fillPrice} | PnL: ${pnl.toFixed(4)} | Position: ${currentSize} -> ${update.newSize}`);
       } else {
         // BUY: update position without PnL
         updatePosition(bot.id, assetId, {
@@ -136,7 +138,7 @@ export async function executeDryRunTrade(
           avgEntryPrice: update.newAvgPrice.toFixed(6),
         });
 
-        console.log(`[DryRun] BUY: ${fillQuantity} @ ${fillPrice} | Position: ${currentSize} -> ${update.newSize} @ avg ${update.newAvgPrice.toFixed(4)}`);
+        log('DryRun', `BUY: ${fillQuantity} @ ${fillPrice} | Position: ${currentSize} -> ${update.newSize} @ avg ${update.newAvgPrice.toFixed(4)}`);
       }
 
       // Create trade record for immediate fill
@@ -175,8 +177,9 @@ export async function executeDryRunTrade(
 
     // For non-marketable orders, only create the order (no trade yet)
     // Trade records will be created by LimitOrderMatcher when the order fills
-    console.log(
-      `[DryRun] Order placed: ${side} ${signal.quantity} ${signal.side} @ ${signal.price} | Order ID: ${orderId}`
+    log(
+      'DryRun',
+      `Order placed: ${side} ${signal.quantity} ${signal.side} @ ${signal.price} | Order ID: ${orderId}`
     );
 
     // Emit ORDER_FILLED event with pending info to trigger UI refresh
@@ -200,9 +203,9 @@ export async function executeDryRunTrade(
       trade: undefined, // No trade until order fills
       orderId,
     };
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error(`[DryRun] Order creation failed:`, errorMessage);
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+    error('DryRun', 'Order creation failed:', errorMessage);
 
     return {
       success: false,

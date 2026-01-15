@@ -6,6 +6,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import { log, warn, error } from '@/lib/logger';
 import type {
   BotConfig,
   BotInstance,
@@ -161,7 +162,7 @@ export class Bot {
    */
   async start(): Promise<void> {
     if (this.state === 'running') {
-      console.log(`[Bot ${this.id}] Already running`);
+      log(`Bot ${this.id}`, 'Already running');
       return;
     }
 
@@ -170,7 +171,7 @@ export class Bot {
       return;
     }
 
-    console.log(`[Bot ${this.id}] Starting...`);
+    log(`Bot ${this.id}`, 'Starting...');
 
     // Get executor and metadata
     const executor = getExecutor(this.config.strategySlug);
@@ -195,7 +196,7 @@ export class Bot {
     this.marketData.onUpdate(() => {
       if (this.state === 'running') {
         this.executeCycle().catch(err => {
-          console.error(`[Bot ${this.id}] Execution cycle error:`, err);
+          error(`Bot ${this.id}`, 'Execution cycle error:', err);
           this.emitEvent({ type: 'ERROR', error: err.message, timestamp: new Date() });
         });
       }
@@ -244,15 +245,15 @@ export class Bot {
           await this.marketData.refreshAll();
           await this.executeCycle();
         } catch (err) {
-          const error = err instanceof Error ? err : new Error(String(err));
-          console.error(`[Bot ${this.id}] Fallback execution cycle error:`, error);
-          this.emitEvent({ type: 'ERROR', error: error.message, timestamp: new Date() });
+          const errObj = err instanceof Error ? err : new Error(String(err));
+          error(`Bot ${this.id}`, 'Fallback execution cycle error:', errObj);
+          this.emitEvent({ type: 'ERROR', error: errObj.message, timestamp: new Date() });
         }
       }
     }, this.EXECUTION_INTERVAL_MS);
 
     this.emitEvent({ type: 'STARTED', timestamp: new Date() });
-    console.log(`[Bot ${this.id}] Started with ${assets.length} assets`);
+    log(`Bot ${this.id}`, `Started with ${assets.length} assets`);
   }
 
   /**
@@ -271,11 +272,11 @@ export class Bot {
         // Use endDate (full timestamp) instead of endDateIso (date only)
         if (market.endDate) {
           this.marketEndTime = new Date(market.endDate);
-          console.log(`[Bot ${this.id.slice(0, 8)}] Market ends at: ${this.marketEndTime.toISOString()}`);
+          log(`Bot ${this.id.slice(0, 8)}`, `Market ends at: ${this.marketEndTime.toISOString()}`);
         }
       }
-    } catch (error) {
-      console.warn(`[Bot ${this.id.slice(0, 8)}] Failed to fetch market end time:`, error);
+    } catch (err) {
+      warn(`Bot ${this.id.slice(0, 8)}`, 'Failed to fetch market end time:', err);
     }
   }
 
@@ -284,11 +285,11 @@ export class Bot {
    */
   async stop(): Promise<void> {
     if (this.state === 'stopped') {
-      console.log(`[Bot ${this.id}] Already stopped`);
+      log(`Bot ${this.id}`, 'Already stopped');
       return;
     }
 
-    console.log(`[Bot ${this.id}] Stopping...`);
+    log(`Bot ${this.id}`, 'Stopping...');
 
     // Clear interval
     if (this.intervalId) {
@@ -305,7 +306,7 @@ export class Bot {
     // Cancel all pending orders
     const cancelledCount = cancelAllBotOrders(this.id);
     if (cancelledCount > 0) {
-      console.log(`[Bot ${this.id}] Cancelled ${cancelledCount} pending orders`);
+      log(`Bot ${this.id}`, `Cancelled ${cancelledCount} pending orders`);
     }
 
     this.state = 'stopped';
@@ -313,7 +314,7 @@ export class Bot {
     this.updatedAt = new Date();
 
     this.emitEvent({ type: 'STOPPED', timestamp: new Date() });
-    console.log(`[Bot ${this.id}] Stopped`);
+    log(`Bot ${this.id}`, 'Stopped');
   }
 
   /**
@@ -321,11 +322,11 @@ export class Bot {
    */
   async pause(): Promise<void> {
     if (this.state !== 'running') {
-      console.log(`[Bot ${this.id}] Cannot pause - not running`);
+      log(`Bot ${this.id}`, 'Cannot pause - not running');
       return;
     }
 
-    console.log(`[Bot ${this.id}] Pausing...`);
+    log(`Bot ${this.id}`, 'Pausing...');
 
     if (this.intervalId) {
       clearInterval(this.intervalId);
@@ -336,7 +337,7 @@ export class Bot {
     this.updatedAt = new Date();
 
     this.emitEvent({ type: 'PAUSED', timestamp: new Date() });
-    console.log(`[Bot ${this.id}] Paused`);
+    log(`Bot ${this.id}`, 'Paused');
   }
 
   /**
@@ -344,11 +345,11 @@ export class Bot {
    */
   async resume(): Promise<void> {
     if (this.state !== 'paused') {
-      console.log(`[Bot ${this.id}] Cannot resume - not paused`);
+      log(`Bot ${this.id}`, 'Cannot resume - not paused');
       return;
     }
 
-    console.log(`[Bot ${this.id}] Resuming...`);
+    log(`Bot ${this.id}`, 'Resuming...');
 
     // Clear any existing interval to prevent memory leak
     if (this.intervalId) {
@@ -358,7 +359,7 @@ export class Bot {
     this.intervalId = setInterval(() => {
       if (this.state === 'running') {
         this.executeCycle().catch(err => {
-          console.error(`[Bot ${this.id}] Execution cycle error:`, err);
+          error(`Bot ${this.id}`, 'Execution cycle error:', err);
           this.emitEvent({ type: 'ERROR', error: err.message, timestamp: new Date() });
         });
       }
@@ -368,7 +369,7 @@ export class Bot {
     this.updatedAt = new Date();
 
     this.emitEvent({ type: 'RESUMED', timestamp: new Date() });
-    console.log(`[Bot ${this.id}] Resumed`);
+    log(`Bot ${this.id}`, 'Resumed');
   }
 
   // ============================================================================
@@ -395,7 +396,7 @@ export class Bot {
 
     const executor = getExecutor(this.config.strategySlug);
     if (!executor) {
-      console.error(`[Bot ${this.id}] No executor found for strategy: ${this.config.strategySlug}`);
+      error(`Bot ${this.id}`, `No executor found for strategy: ${this.config.strategySlug}`);
       return;
     }
 
@@ -455,7 +456,7 @@ export class Bot {
     const signal = await executor.execute(context);
 
     if (signal && signal.action !== 'HOLD') {
-      console.log(`[Bot ${this.id}] Signal: ${signal.action} ${signal.quantity} ${signal.side} @ ${signal.price}`);
+      log(`Bot ${this.id}`, `Signal: ${signal.action} ${signal.quantity} ${signal.side} @ ${signal.price}`);
 
       if (this.tradeExecutor) {
         const trade = await this.tradeExecutor(this, signal);
@@ -488,7 +489,7 @@ export class Bot {
           rules.maxPriceDistance
         );
         if (cancelled.length > 0) {
-          console.log(`[Bot ${this.id}] Cancelled ${cancelled.length} stale ${label} orders`);
+          log(`Bot ${this.id}`, `Cancelled ${cancelled.length} stale ${label} orders`);
         }
       }
     } else {
@@ -502,7 +503,7 @@ export class Bot {
           rules.maxPriceDistance
         );
         if (cancelled.length > 0) {
-          console.log(`[Bot ${this.id}] Cancelled ${cancelled.length} stale orders`);
+          log(`Bot ${this.id}`, `Cancelled ${cancelled.length} stale orders`);
         }
       }
     }
@@ -687,8 +688,9 @@ export class Bot {
       // Multi-asset: DB is source of truth, only update metrics
       this.metrics.totalTrades++;
       this.updatedAt = new Date();
-      console.log(
-        `[Bot ${this.id}] Multi-asset fill: ${fill.side} ${fill.outcome} ${parseFloat(fill.filledQuantity).toFixed(4)} @ ${fill.fillPrice}`
+      log(
+        `Bot ${this.id}`,
+        `Multi-asset fill: ${fill.side} ${fill.outcome} ${parseFloat(fill.filledQuantity).toFixed(4)} @ ${fill.fillPrice}`
       );
     } else {
       // Single-asset: update in-memory position
@@ -714,8 +716,9 @@ export class Bot {
       this.position.avgEntryPrice = newAvg.toFixed(6);
       this.position.outcome = fill.outcome;
 
-      console.log(
-        `[Bot ${this.id}] Position updated (BUY fill): size=${newSize.toFixed(4)}, avgPrice=${newAvg.toFixed(4)}`
+      log(
+        `Bot ${this.id}`,
+        `Position updated (BUY fill): size=${newSize.toFixed(4)}, avgPrice=${newAvg.toFixed(4)}`
       );
     } else {
       const newSize = currentSize - fillQty;
@@ -730,8 +733,9 @@ export class Bot {
         this.position.avgEntryPrice = '0';
       }
 
-      console.log(
-        `[Bot ${this.id}] Position updated (SELL fill): size=${Math.max(0, newSize).toFixed(4)}, pnl=${pnl.toFixed(4)}`
+      log(
+        `Bot ${this.id}`,
+        `Position updated (SELL fill): size=${Math.max(0, newSize).toFixed(4)}, pnl=${pnl.toFixed(4)}`
       );
 
       if (pnl > 0) {
@@ -787,8 +791,8 @@ export class Bot {
     for (const handler of this.eventHandlers) {
       try {
         handler(event);
-      } catch (error) {
-        console.error(`[Bot ${this.id}] Event handler error:`, error);
+      } catch (err) {
+        error(`Bot ${this.id}`, 'Event handler error:', err);
       }
     }
   }
@@ -879,7 +883,7 @@ export class Bot {
       if (!response.ok) {
         const text = await response.text();
         if (text.includes('No orderbook exists') || text.includes('market not found')) {
-          console.log(`[Bot ${this.id}] Market closed - order book no longer exists`);
+          log(`Bot ${this.id}`, 'Market closed - order book no longer exists');
           return false;
         }
         return true;
@@ -887,24 +891,24 @@ export class Bot {
 
       const data = await response.json();
       if (data.error && (data.error.includes('No orderbook') || data.error.includes('not found'))) {
-        console.log(`[Bot ${this.id}] Market closed - order book no longer exists`);
+        log(`Bot ${this.id}`, 'Market closed - order book no longer exists');
         return false;
       }
 
       return true;
-    } catch (error) {
-      console.warn(`[Bot ${this.id}] Error checking market status:`, error);
+    } catch (err) {
+      warn(`Bot ${this.id}`, 'Error checking market status:', err);
       return true;
     }
   }
 
   private async handleMarketClosed(): Promise<void> {
-    console.log(`[Bot ${this.id}] Market closed - settling positions`);
+    log(`Bot ${this.id}`, 'Market closed - settling positions');
 
     // 1. Cancel all pending orders first
     const cancelledCount = cancelAllBotOrders(this.id);
     if (cancelledCount > 0) {
-      console.log(`[Bot ${this.id}] Cancelled ${cancelledCount} pending orders due to market closure`);
+      log(`Bot ${this.id}`, `Cancelled ${cancelledCount} pending orders due to market closure`);
     }
 
     // 2. Detect winning outcome from last trade prices
@@ -941,9 +945,9 @@ export class Bot {
         timestamp: new Date(),
       });
 
-      console.log(
-        `[Bot ${this.id}] Market resolved - ${resolution.winningOutcome} won | ` +
-        `Settlements: ${settlements.length} | Total PnL: ${totalPnl.toFixed(4)}`
+      log(
+        `Bot ${this.id}`,
+        `Market resolved - ${resolution.winningOutcome} won | Settlements: ${settlements.length} | Total PnL: ${totalPnl.toFixed(4)}`
       );
     } else {
       // Could not determine resolution - emit error
@@ -952,7 +956,7 @@ export class Bot {
         error: 'Market closed - could not determine resolution. Positions remain unsettled.',
         timestamp: new Date(),
       });
-      console.warn(`[Bot ${this.id}] Could not determine market resolution from last trade prices`);
+      warn(`Bot ${this.id}`, 'Could not determine market resolution from last trade prices');
     }
 
     // 6. Stop the bot

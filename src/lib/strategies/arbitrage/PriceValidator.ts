@@ -6,6 +6,7 @@
  * - Individual leg prices within acceptable ranges
  */
 
+import { log } from '@/lib/logger';
 import type { PositionAnalysis } from './PositionAnalyzer';
 
 /**
@@ -52,7 +53,7 @@ export class PriceValidator {
     const combinedAvg = projectedYesAvg + projectedNoAvg;
 
     if (combinedAvg >= this.profitThreshold) {
-      console.log(`[Arb] BLOCKED: Projected combined $${combinedAvg.toFixed(3)} >= $${this.profitThreshold}`);
+      log('Arb', `BLOCKED: Projected combined $${combinedAvg.toFixed(3)} >= $${this.profitThreshold}`);
       return false;
     }
     return true;

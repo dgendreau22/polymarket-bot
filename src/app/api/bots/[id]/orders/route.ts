@@ -7,6 +7,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getBotManager } from '@/lib/bots';
+import { error } from '@/lib/logger';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -39,12 +40,12 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       data: orders,
       count: orders.length,
     });
-  } catch (error) {
-    console.error('[API] GET /api/bots/[id]/orders error:', error);
+  } catch (err) {
+    error('API', 'GET /api/bots/[id]/orders error:', err);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to get orders',
+        error: err instanceof Error ? err.message : 'Failed to get orders',
       },
       { status: 500 }
     );
@@ -78,12 +79,12 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
       data: { cancelledCount },
       message: `Cancelled ${cancelledCount} orders`,
     });
-  } catch (error) {
-    console.error('[API] DELETE /api/bots/[id]/orders error:', error);
+  } catch (err) {
+    error('API', 'DELETE /api/bots/[id]/orders error:', err);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to cancel orders',
+        error: err instanceof Error ? err.message : 'Failed to cancel orders',
       },
       { status: 500 }
     );

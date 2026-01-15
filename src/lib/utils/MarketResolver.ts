@@ -9,6 +9,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { LastTrade } from '../polymarket/types';
 import type { Trade, PositionRow } from '../bots/types';
+import { log, warn } from '@/lib/logger';
 import {
   getPositionsByBotId,
   updatePosition,
@@ -158,7 +159,7 @@ export function settlePosition(
   // Get bot info for trade record
   const bot = getBotById(botId);
   if (!bot) {
-    console.warn(`[MarketResolver] Bot not found: ${botId}`);
+    warn('MarketResolver', `Bot not found: ${botId}`);
     return null;
   }
 
@@ -194,8 +195,9 @@ export function settlePosition(
     realizedPnl: newRealizedPnl.toFixed(6),
   });
 
-  console.log(
-    `[MarketResolver] Settled ${position.outcome} position: ` +
+  log(
+    'MarketResolver',
+    `Settled ${position.outcome} position: ` +
       `${size.toFixed(4)} @ avg ${avgEntryPrice.toFixed(4)} -> ` +
       `settled @ ${resolutionPrice} | PnL: ${settlementPnl.toFixed(4)}`
   );

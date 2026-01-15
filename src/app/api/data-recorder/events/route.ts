@@ -7,6 +7,7 @@
 import { NextRequest } from 'next/server';
 import { getDataRecorder } from '@/lib/data';
 import type { RecorderEvent } from '@/lib/data';
+import { error } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,7 +24,7 @@ export async function GET(request: NextRequest) {
           const message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
           controller.enqueue(encoder.encode(message));
         } catch (err) {
-          console.error('[DataRecorder SSE] Failed to send message:', err);
+          error('API', 'DataRecorder SSE Failed to send message:', err);
         }
       };
 

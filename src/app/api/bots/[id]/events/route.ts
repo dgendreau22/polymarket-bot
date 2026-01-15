@@ -11,6 +11,7 @@ import { getTrades, rowToTrade } from '@/lib/persistence/TradeRepository';
 import { getOpenOrdersByBotId, rowToLimitOrder } from '@/lib/persistence/LimitOrderRepository';
 import { getPositionsByBotId, rowToPosition } from '@/lib/persistence/BotRepository';
 import type { BotEvent } from '@/lib/bots/types';
+import { error } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,7 +39,7 @@ export async function GET(
           const message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
           controller.enqueue(encoder.encode(message));
         } catch (err) {
-          console.error('[SSE] Failed to send message:', err);
+          error('API', 'SSE Failed to send message:', err);
         }
       };
 

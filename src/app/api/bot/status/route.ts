@@ -8,6 +8,7 @@ import { NextResponse } from "next/server";
 import { hasCredentials, getConfig, getOrInitClobClient } from "@/lib/polymarket";
 import { getBotManager } from "@/lib/bots/BotManager";
 import { AssetType } from "@polymarket/clob-client";
+import { error } from '@/lib/logger';
 
 async function getPortfolioData() {
   if (!hasCredentials()) {
@@ -39,8 +40,8 @@ async function getPortfolioData() {
       cashBalance,
       positionsValue,
     };
-  } catch (error) {
-    console.error("[API] Failed to fetch portfolio data:", error);
+  } catch (err) {
+    error('API', 'Failed to fetch portfolio data:', err);
     return {
       totalValue: 0,
       cashBalance: 0,
@@ -75,12 +76,12 @@ export async function GET() {
         portfolio,
       },
     });
-  } catch (error) {
-    console.error("[API] Failed to get bot status:", error);
+  } catch (err) {
+    error('API', 'Failed to get bot status:', err);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
+        error: err instanceof Error ? err.message : "Unknown error",
       },
       { status: 500 }
     );

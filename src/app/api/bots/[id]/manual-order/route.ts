@@ -9,6 +9,7 @@ import { getBotManager } from '@/lib/bots';
 import { executeDryRunTrade } from '@/lib/bots/DryRunExecutor';
 import { getPosition } from '@/lib/persistence/BotRepository';
 import type { StrategySignal } from '@/lib/bots/types';
+import { error } from '@/lib/logger';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -202,12 +203,12 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         quantity,
       },
     });
-  } catch (error) {
-    console.error('[API] POST /api/bots/[id]/manual-order error:', error);
+  } catch (err) {
+    error('API', 'POST /api/bots/[id]/manual-order error:', err);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to create order',
+        error: err instanceof Error ? err.message : 'Failed to create order',
       },
       { status: 500 }
     );

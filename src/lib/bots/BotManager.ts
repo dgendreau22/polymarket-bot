@@ -4,6 +4,7 @@
  * Singleton that orchestrates bot lifecycle, persistence, and trade execution.
  */
 
+import { log, error } from '@/lib/logger';
 import { Bot } from './Bot';
 import { createDryRunExecutor } from './DryRunExecutor';
 import { createLiveExecutor } from './LiveExecutor';
@@ -111,9 +112,9 @@ class BotManager {
         this.bots.set(record.id, bot);
       }
 
-      console.log(`[BotManager] Restored ${botRecords.length} bots from database`);
-    } catch (error) {
-      console.error('[BotManager] Failed to restore bots:', error);
+      log('BotManager', `Restored ${botRecords.length} bots from database`);
+    } catch (err) {
+      error('BotManager', 'Failed to restore bots:', err);
     }
   }
 
@@ -167,7 +168,7 @@ class BotManager {
           getOrCreatePosition(record.id, record.market_id, assetId, asset.label as 'YES' | 'NO');
         }
       }
-      console.log(`[BotManager] Created multi-asset positions for bot: ${record.id}`);
+      log('BotManager', `Created multi-asset positions for bot: ${record.id}`);
     } else {
       // Single-asset strategies: create single position
       getOrCreatePosition(record.id, record.market_id, record.asset_id || '', 'YES');
@@ -178,7 +179,7 @@ class BotManager {
 
     this.bots.set(record.id, bot);
 
-    console.log(`[BotManager] Created bot: ${record.id} (${config.name})`);
+    log('BotManager', `Created bot: ${record.id} (${config.name})`);
     return bot.toInstance();
   }
 
@@ -198,7 +199,7 @@ class BotManager {
       startedAt: new Date().toISOString(),
     });
 
-    console.log(`[BotManager] Started bot: ${botId}`);
+    log('BotManager', `Started bot: ${botId}`);
   }
 
   /**
@@ -215,7 +216,7 @@ class BotManager {
     // Cancel all pending orders to prevent stale orders from filling later
     const cancelledCount = cancelAllBotOrders(botId);
     if (cancelledCount > 0) {
-      console.log(`[BotManager] Cancelled ${cancelledCount} pending orders for bot: ${botId}`);
+      log('BotManager', `Cancelled ${cancelledCount} pending orders for bot: ${botId}`);
     }
 
     // Update database
@@ -226,7 +227,7 @@ class BotManager {
     // Note: Position is already persisted by LimitOrderMatcher during trading
     // The database is the source of truth, no need to persist in-memory position
 
-    console.log(`[BotManager] Stopped bot: ${botId}`);
+    log('BotManager', `Stopped bot: ${botId}`);
   }
 
   /**
@@ -243,7 +244,7 @@ class BotManager {
     // Update database
     updateBotState(botId, 'paused');
 
-    console.log(`[BotManager] Paused bot: ${botId}`);
+    log('BotManager', `Paused bot: ${botId}`);
   }
 
   /**
@@ -260,7 +261,7 @@ class BotManager {
     // Update database
     updateBotState(botId, 'running');
 
-    console.log(`[BotManager] Resumed bot: ${botId}`);
+    log('BotManager', `Resumed bot: ${botId}`);
   }
 
   /**
@@ -281,7 +282,7 @@ class BotManager {
 
     if (deleted) {
       this.bots.delete(botId);
-      console.log(`[BotManager] Deleted bot: ${botId}`);
+      log('BotManager', `Deleted bot: ${botId}`);
     }
 
     return deleted;
@@ -414,7 +415,7 @@ class BotManager {
    */
   cancelBotOrders(botId: string): number {
     const cancelledCount = cancelAllBotOrders(botId);
-    console.log(`[BotManager] Cancelled ${cancelledCount} orders for bot: ${botId}`);
+    log('BotManager', `Cancelled ${cancelledCount} orders for bot: ${botId}`);
     return cancelledCount;
   }
 }

@@ -6,6 +6,7 @@
 
 import { NextResponse } from 'next/server';
 import { hasCredentials, getOrInitClobClient } from '@/lib/polymarket/client';
+import { error } from '@/lib/logger';
 
 interface Position {
   asset: string;
@@ -79,12 +80,12 @@ export async function GET() {
         balance: balanceAllowance,
       },
     });
-  } catch (error) {
-    console.error('[API] GET /api/positions error:', error);
+  } catch (err) {
+    error('API', 'GET /api/positions error:', err);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to fetch positions',
+        error: err instanceof Error ? err.message : 'Failed to fetch positions',
       },
       { status: 500 }
     );

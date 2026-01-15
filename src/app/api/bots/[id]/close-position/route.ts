@@ -10,6 +10,7 @@ import { getPosition, updatePosition } from '@/lib/persistence/BotRepository';
 import { createLimitOrder, updateOrderFill } from '@/lib/persistence/LimitOrderRepository';
 import { createTrade } from '@/lib/persistence/TradeRepository';
 import { v4 as uuidv4 } from 'uuid';
+import { log, error } from '@/lib/logger';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -140,7 +141,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         realizedPnl: newRealizedPnl,
       });
 
-      console.log(`[ClosePosition] Bot ${botId} closed position: SELL ${positionSize} @ ${bestBid}, PnL: ${pnl.toFixed(4)}`);
+      log('API', `ClosePosition Bot ${botId} closed position: SELL ${positionSize} @ ${bestBid}, PnL: ${pnl.toFixed(4)}`);
 
       return NextResponse.json({
         success: true,
@@ -158,12 +159,12 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         { status: 501 }
       );
     }
-  } catch (error) {
-    console.error('[API] POST /api/bots/[id]/close-position error:', error);
+  } catch (err) {
+    error('API', 'POST /api/bots/[id]/close-position error:', err);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to close position',
+        error: err instanceof Error ? err.message : 'Failed to close position',
       },
       { status: 500 }
     );

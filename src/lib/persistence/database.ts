@@ -7,6 +7,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import { initializeSchema } from './schema';
+import { log } from '@/lib/logger';
 
 // Use global to persist across Next.js hot reloads in development
 const globalForDb = globalThis as unknown as {
@@ -28,7 +29,7 @@ export function getDatabase(): Database.Database {
     // Initialize schema if needed
     initializeSchema(globalForDb.db);
 
-    console.log(`[Database] Connected to SQLite at ${dbPath}`);
+    log('Database', `Connected to SQLite at ${dbPath}`);
   }
 
   return globalForDb.db;
@@ -41,7 +42,7 @@ export function closeDatabase(): void {
   if (globalForDb.db) {
     globalForDb.db.close();
     globalForDb.db = undefined;
-    console.log('[Database] Connection closed');
+    log('Database', 'Connection closed');
   }
 }
 

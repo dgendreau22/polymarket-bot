@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { loadStrategy } from '@/lib/strategies';
 import { getBotManager } from '@/lib/bots';
 import { getStrategyTradeStats, getTrades, rowToTrade } from '@/lib/persistence';
+import { error } from '@/lib/logger';
 
 interface RouteParams {
   params: Promise<{ slug: string }>;
@@ -62,12 +63,12 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         trades,
       },
     });
-  } catch (error) {
-    console.error('[API] GET /api/strategies/[slug] error:', error);
+  } catch (err) {
+    error('API', 'GET /api/strategies/[slug] error:', err);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to fetch strategy',
+        error: err instanceof Error ? err.message : 'Failed to fetch strategy',
       },
       { status: 500 }
     );

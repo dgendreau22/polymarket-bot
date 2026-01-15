@@ -7,6 +7,7 @@
  * - Priority 2: Round-robin entry (alternate YES/NO for balanced accumulation)
  */
 
+import { log } from '@/lib/logger';
 import type { ArbitrageConfig } from './ArbitrageConfig';
 import type { ArbitrageState } from './ArbitrageState';
 import type { PositionAnalysis } from './PositionAnalyzer';
@@ -66,7 +67,7 @@ export class DecisionEngine {
         const sellDecision = this.trySellLeadingLeg(analysis, marketData);
         if (sellDecision) {
           this.state.recordOrder(botId, sellDecision.leg);  // Record for cooldown
-          console.log(`[Arb] REBALANCE: Selling ${sellDecision.orderSize.toFixed(0)} ${sellDecision.leg} to reduce imbalance`);
+          log('Arb', `REBALANCE: Selling ${sellDecision.orderSize.toFixed(0)} ${sellDecision.leg} to reduce imbalance`);
           return sellDecision;
         }
       }
@@ -111,7 +112,7 @@ export class DecisionEngine {
 
     // Check if selling would be profitable
     if (leadingLegBid <= leadingLegAvg) {
-      console.log(`[Arb] Skipping ${leadingLeg} sell - bid ${leadingLegBid.toFixed(3)} <= entry ${leadingLegAvg.toFixed(3)}`);
+      log('Arb', `Skipping ${leadingLeg} sell - bid ${leadingLegBid.toFixed(3)} <= entry ${leadingLegAvg.toFixed(3)}`);
       return null;
     }
 
@@ -161,7 +162,7 @@ export class DecisionEngine {
 
     // Check profitability
     if (!this.validator.wouldCostBeValid(analysis, leg, this.config.orderSize, buyPrice)) {
-      console.log(`[Arb] Skipping ${leg} buy - would push combined avg >= $${this.config.profitThreshold}`);
+      log('Arb', `Skipping ${leg} buy - would push combined avg >= $${this.config.profitThreshold}`);
       return null;
     }
 

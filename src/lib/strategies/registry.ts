@@ -4,6 +4,7 @@
  * Maps strategy slugs to their executor implementations.
  */
 
+import { log } from '@/lib/logger';
 import type { IStrategyExecutor, ExecutorMetadata } from '../bots/types';
 
 // Import executor implementations
@@ -26,7 +27,7 @@ const executors: Map<string, IStrategyExecutor> = new Map();
  */
 export function registerStrategy(slug: string, executor: IStrategyExecutor): void {
   executors.set(slug, executor);
-  console.log(`[Registry] Registered strategy executor: ${slug}`);
+  log('Registry', `Registered strategy executor: ${slug}`);
 }
 
 /**

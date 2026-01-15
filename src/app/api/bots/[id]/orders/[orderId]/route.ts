@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getBotManager } from '@/lib/bots';
 import { cancelOrder, getLimitOrderById } from '@/lib/persistence/LimitOrderRepository';
+import { error } from '@/lib/logger';
 
 interface RouteParams {
   params: Promise<{ id: string; orderId: string }>;
@@ -58,12 +59,12 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
       success: true,
       message: 'Order cancelled',
     });
-  } catch (error) {
-    console.error('[API] DELETE /api/bots/[id]/orders/[orderId] error:', error);
+  } catch (err) {
+    error('API', 'DELETE /api/bots/[id]/orders/[orderId] error:', err);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to cancel order',
+        error: err instanceof Error ? err.message : 'Failed to cancel order',
       },
       { status: 500 }
     );

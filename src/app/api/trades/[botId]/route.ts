@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getTradesByBotId, getBotTradeStats, rowToTrade } from '@/lib/persistence';
 import { getBotManager } from '@/lib/bots';
+import { error } from '@/lib/logger';
 
 interface RouteParams {
   params: Promise<{ botId: string }>;
@@ -55,12 +56,12 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       },
       count: trades.length,
     });
-  } catch (error) {
-    console.error('[API] GET /api/trades/[botId] error:', error);
+  } catch (err) {
+    error('API', 'GET /api/trades/[botId] error:', err);
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to fetch trades',
+        error: err instanceof Error ? err.message : 'Failed to fetch trades',
       },
       { status: 500 }
     );

@@ -8,6 +8,7 @@
 import type { OrderBook, LastTrade, TickSize } from '../polymarket/types';
 import type { AssetSubscription } from './types';
 import { getWebSocket } from '../polymarket/websocket';
+import { log, warn, error } from '@/lib/logger';
 
 /** Price information extracted from order book */
 export interface AssetPrices {
@@ -60,8 +61,8 @@ export class MarketDataManager {
     if (!ws.isConnected()) {
       try {
         await ws.connect();
-      } catch (error) {
-        console.error(`[MarketData ${this.botId.slice(0, 8)}] Failed to connect WebSocket:`, error);
+      } catch (err) {
+        error(`MarketData ${this.botId.slice(0, 8)}`, 'Failed to connect WebSocket:', err);
       }
     }
 
@@ -98,7 +99,7 @@ export class MarketDataManager {
     }
 
     this.isConnected = true;
-    console.log(`[MarketData ${this.botId.slice(0, 8)}] Connected with ${this.assets.length} assets`);
+    log(`MarketData ${this.botId.slice(0, 8)}`, `Connected with ${this.assets.length} assets`);
   }
 
   /**
@@ -109,7 +110,7 @@ export class MarketDataManager {
     const assetIds = this.assets.map(a => a.assetId);
     ws.unsubscribe(assetIds);
     this.isConnected = false;
-    console.log(`[MarketData ${this.botId.slice(0, 8)}] Disconnected`);
+    log(`MarketData ${this.botId.slice(0, 8)}`, 'Disconnected');
   }
 
   /**
@@ -134,8 +135,8 @@ export class MarketDataManager {
 
           this.handleOrderBookUpdate(asset.label, orderBook);
         }
-      } catch (error) {
-        console.warn(`[MarketData ${this.botId.slice(0, 8)}] Failed to refresh ${asset.label}:`, error);
+      } catch (err) {
+        warn(`MarketData ${this.botId.slice(0, 8)}`, `Failed to refresh ${asset.label}:`, err);
       }
     }
   }
@@ -279,15 +280,15 @@ export class MarketDataManager {
     for (const callback of this.tradeCallbacks) {
       try {
         callback(label, trade);
-      } catch (error) {
-        console.error(`[MarketData ${this.botId.slice(0, 8)}] Trade callback error:`, error);
+      } catch (err) {
+        error(`MarketData ${this.botId.slice(0, 8)}`, 'Trade callback error:', err);
       }
     }
   }
 
   private handleTickSizeUpdate(label: string, tickSize: TickSize): void {
     this.tickSizes.set(label, tickSize);
-    console.log(`[MarketData ${this.botId.slice(0, 8)}] ${label} tick size: ${tickSize.tick_size}`);
+    log(`MarketData ${this.botId.slice(0, 8)}`, `${label} tick size: ${tickSize.tick_size}`);
   }
 
   private extractPricesFromOrderBook(orderBook: OrderBook): AssetPrices | null {
@@ -354,8 +355,8 @@ export class MarketDataManager {
     for (const callback of this.updateCallbacks) {
       try {
         callback();
-      } catch (error) {
-        console.error(`[MarketData ${this.botId.slice(0, 8)}] Update callback error:`, error);
+      } catch (err) {
+        error(`MarketData ${this.botId.slice(0, 8)}`, 'Update callback error:', err);
       }
     }
   }
