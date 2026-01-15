@@ -346,7 +346,6 @@ export class PolymarketWebSocket {
           timestamp: normalizedTimestamp,
         };
         const callbacks = this.tradeCallbacks.get(assetId) || [];
-        console.log(`[WS] last_trade_price: ${trade.price} (${callbacks.length} callbacks)`);
         for (const callback of callbacks) {
           callback(trade);
         }

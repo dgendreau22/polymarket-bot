@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
     const orchestrator = getOrchestrator();
 
     // Validate strategy
-    const validStrategies = ['arbitrage', 'market-maker', 'test-oscillator'];
+    const validStrategies = ['arbitrage', 'market-maker', 'test-oscillator', 'time-above-50'];
     if (body.strategy && !validStrategies.includes(body.strategy)) {
       return NextResponse.json(
         { success: false, error: `Invalid strategy. Valid options: ${validStrategies.join(', ')}` },

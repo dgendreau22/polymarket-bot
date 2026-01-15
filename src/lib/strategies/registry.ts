@@ -10,11 +10,13 @@ import type { IStrategyExecutor, ExecutorMetadata } from '../bots/types';
 import { TestOscillatorExecutor } from './test-oscillator-executor';
 import { MarketMakerExecutor } from './market-maker-executor';
 import { ArbitrageExecutor } from './arbitrage-executor';
+import { TimeAbove50Executor } from './time-above-50-executor';
 
 // Re-export executor classes for external use
 export { TestOscillatorExecutor } from './test-oscillator-executor';
 export { MarketMakerExecutor } from './market-maker-executor';
 export { ArbitrageExecutor } from './arbitrage-executor';
+export { TimeAbove50Executor } from './time-above-50-executor';
 
 // Registry of strategy executors
 const executors: Map<string, IStrategyExecutor> = new Map();
@@ -84,3 +86,4 @@ export function cleanupBotState(botId: string): void {
 registerStrategy('test-oscillator', new TestOscillatorExecutor());
 registerStrategy('market-maker', new MarketMakerExecutor());
 registerStrategy('arbitrage', new ArbitrageExecutor());
+registerStrategy('time-above-50', new TimeAbove50Executor());

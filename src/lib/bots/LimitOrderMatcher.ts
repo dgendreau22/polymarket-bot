@@ -48,8 +48,6 @@ export function processTradeForFills(lastTrade: LastTrade): FillResult[] {
   // Get all open orders for this asset
   const openOrders = getOpenOrdersByAssetId(lastTrade.asset_id);
 
-  console.log(`[OrderMatcher] Processing trade @ ${lastTrade.price} for asset ${lastTrade.asset_id?.slice(0, 8)}... | Found ${openOrders.length} open orders`);
-
   for (const order of openOrders) {
     // Get fresh order state from DB to prevent race conditions
     const freshOrder = isOrderOpenForFill(order.id);
@@ -65,8 +63,6 @@ export function processTradeForFills(lastTrade: LastTrade): FillResult[] {
     // Check if trade price crosses order price
     const shouldFill = checkPriceCrossing(freshOrder.side, tradePrice, orderPrice);
 
-    console.log(`[OrderMatcher] Order ${freshOrder.id.slice(0, 8)}... | ${freshOrder.side} @ ${orderPrice} | trade @ ${tradePrice} | shouldFill: ${shouldFill}`);
-
     if (shouldFill && remainingQuantity > 0) {
       // Calculate fill amount
       // For dry-run simulation, if trade size is 0 or unknown, fill the entire remaining order
@@ -80,12 +76,10 @@ export function processTradeForFills(lastTrade: LastTrade): FillResult[] {
           const position = getOrCreatePosition(freshOrder.bot_id, bot.market_id, freshOrder.asset_id);
           const currentSize = parseFloat(position.size);
           if (currentSize <= 0) {
-            console.log(`[OrderMatcher] Skipping SELL fill - no position to sell`);
             continue;
           }
           // Only fill up to available position
           if (fillAmount > currentSize) {
-            console.log(`[OrderMatcher] Limiting SELL fill from ${fillAmount} to ${currentSize} (position limit)`);
             fillAmount = currentSize;
           }
         }
@@ -105,7 +99,6 @@ export function processTradeForFills(lastTrade: LastTrade): FillResult[] {
       if (tradeCreated) {
         updateOrderFill(freshOrder.id, newFilledQuantity.toFixed(6), newStatus);
       } else {
-        console.warn(`[OrderMatcher] Trade not created for order ${freshOrder.id.slice(0, 8)}..., skipping order update`);
         continue;
       }
 
@@ -122,12 +115,6 @@ export function processTradeForFills(lastTrade: LastTrade): FillResult[] {
       };
 
       fills.push(fillResult);
-
-      console.log(
-        `[OrderMatcher] Order ${freshOrder.id} ${isFullyFilled ? 'filled' : 'partially filled'}: ` +
-          `${fillAmount.toFixed(4)} @ ${lastTrade.price} | ` +
-          `Remaining: ${newRemainingQuantity.toFixed(4)}`
-      );
     }
   }
 
@@ -188,7 +175,6 @@ function updateTradeForOrderFill(
   // Get or create position - this ensures position exists for first trade
   const bot = getBotById(botId);
   if (!bot) {
-    console.warn(`[OrderMatcher] Bot not found: ${botId}`);
     return false;
   }
 
@@ -199,7 +185,6 @@ function updateTradeForOrderFill(
   if (orderSide === 'SELL') {
     // Safety check: can't sell more than current position
     if (currentSize < fillAmount) {
-      console.warn(`[OrderMatcher] Cannot SELL ${fillAmount} - only have ${currentSize} shares. Skipping fill.`);
       return false;
     }
   }
@@ -224,16 +209,9 @@ function updateTradeForOrderFill(
     realizedPnl: orderSide === 'SELL' ? newRealizedPnl.toFixed(6) : undefined,
   });
 
-  if (orderSide === 'SELL') {
-    console.log(`[OrderMatcher] SELL fill: ${fillAmount} @ ${fillPrice} | PnL: ${pnl.toFixed(4)} | Position: ${currentSize} -> ${update.newSize}`);
-  } else {
-    console.log(`[OrderMatcher] BUY fill: ${fillAmount} @ ${fillPrice} | Position: ${currentSize} -> ${update.newSize} @ avg ${update.newAvgPrice.toFixed(4)}`);
-  }
-
   // Create a new filled trade record for THIS fill event (partial or full)
   const order = getLimitOrderById(orderId);
   if (!order) {
-    console.warn(`[OrderMatcher] Order not found: ${orderId}`);
     return false;
   }
 
@@ -261,8 +239,6 @@ function updateTradeForOrderFill(
     createdAt: now,
   });
 
-  console.log(`[OrderMatcher] Fill trade created: ${orderSide} ${fillAmount} @ ${fillPrice} | PnL: ${pnl.toFixed(4)} | Trade ID: ${fillTrade.id.slice(0, 8)}...`);
-
   // If order is now fully filled, cancel the original pending trade (if any)
   if (isFullyFilled) {
     const pendingTrades = getTrades({
@@ -274,7 +250,6 @@ function updateTradeForOrderFill(
     if (pendingTrade) {
       // Mark the pending trade as cancelled since we've created individual fill records
       updateTradeStatus(pendingTrade.id, 'cancelled', {});
-      console.log(`[OrderMatcher] Pending trade ${pendingTrade.id.slice(0, 8)}... cancelled (replaced by fill records)`);
     }
   }
 
@@ -342,11 +317,9 @@ function fillSingleOrder(
       const position = getOrCreatePosition(freshOrder.bot_id, bot.market_id, freshOrder.asset_id);
       const currentSize = parseFloat(position.size);
       if (currentSize <= 0) {
-        console.log(`[OrderMatcher] Skipping SELL fill - no position to sell`);
         return null;
       }
       if (actualFillAmount > currentSize) {
-        console.log(`[OrderMatcher] Limiting SELL fill from ${actualFillAmount} to ${currentSize} (position limit)`);
         actualFillAmount = currentSize;
       }
     }
@@ -373,17 +346,10 @@ function fillSingleOrder(
 
   // Only update order if trade was created successfully
   if (!tradeCreated) {
-    console.warn(`[OrderMatcher] Trade not created for order ${freshOrder.id.slice(0, 8)}..., skipping`);
     return null;
   }
 
   updateOrderFill(freshOrder.id, newFilledQuantity.toFixed(6), newStatus);
-
-  console.log(
-    `[OrderMatcher] Order ${freshOrder.id.slice(0, 8)}... ${isFullyFilled ? 'filled' : 'partially filled'}: ` +
-      `${actualFillAmount.toFixed(4)} @ ${fillPrice} | ` +
-      `Remaining: ${newRemainingQuantity.toFixed(4)}`
-  );
 
   return {
     orderId: freshOrder.id,
@@ -433,11 +399,6 @@ export function fillMarketableOrders(
   const yesPrices = getBestPrices(yesOrderBook);
   const noPrices = getBestPrices(noOrderBook || null);
 
-  // Debug: Log order book state
-  if (yesPrices.bestAsk === Infinity || noPrices.bestAsk === Infinity) {
-    console.log(`[OrderMatcher] WARNING: Order book missing - YES ask=${yesPrices.bestAsk === Infinity ? 'MISSING' : yesPrices.bestAsk}, NO ask=${noPrices.bestAsk === Infinity ? 'MISSING' : noPrices.bestAsk}`);
-  }
-
   // Re-fetch open orders each iteration to get fresh state
   let openOrders = getOpenOrdersByBotId(botId);
 
@@ -464,10 +425,6 @@ export function fillMarketableOrders(
     }
 
     if (shouldFill) {
-      console.log(
-        `[OrderMatcher] Filling marketable ${order.outcome} ${order.side} @ ${orderPrice} against ${order.side === 'BUY' ? 'ask' : 'bid'} @ ${fillPrice}`
-      );
-
       // Fill this specific order only (not all matching orders)
       const fill = fillSingleOrder(order, fillPrice, remainingQty);
       if (fill) {

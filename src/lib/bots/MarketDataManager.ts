@@ -274,7 +274,6 @@ export class MarketDataManager {
 
   private handleTradeUpdate(label: string, trade: LastTrade): void {
     this.lastTrades.set(label, trade);
-    console.log(`[MarketData ${this.botId.slice(0, 8)}] ${label} trade: ${trade.side} ${trade.size} @ ${trade.price}`);
 
     // Notify trade listeners
     for (const callback of this.tradeCallbacks) {
