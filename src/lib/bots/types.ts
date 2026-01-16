@@ -295,6 +295,8 @@ export interface StrategyContext {
   botStartTime?: Date;
   /** When the market closes/expires */
   marketEndTime?: Date;
+  /** Callback to emit bot events (for real-time updates) */
+  emitEvent?: (event: BotEvent) => void;
 }
 
 /** Strategy signal output */
@@ -412,6 +414,21 @@ export interface MarketResolution {
   totalRealizedPnl: number;
 }
 
+/** Strategy metric data for real-time charting */
+export interface StrategyMetricData {
+  botId: string;
+  timestamp: number;
+  tau: number | null;
+  edge: number | null;
+  qStar: number | null;
+  theta: number | null;
+  delta: number | null;
+  price: number | null;
+  positionYes: number;
+  positionNo: number;
+  totalPnl: number | null;
+}
+
 /** Bot lifecycle events */
 export type BotEvent =
   | { type: 'STARTED'; timestamp: Date }
@@ -421,4 +438,5 @@ export type BotEvent =
   | { type: 'TRADE_EXECUTED'; trade: Trade }
   | { type: 'ORDER_FILLED'; fill: FillResult; timestamp: Date }
   | { type: 'ERROR'; error: string; timestamp: Date }
-  | { type: 'MARKET_RESOLVED'; resolution: MarketResolution; timestamp: Date };
+  | { type: 'MARKET_RESOLVED'; resolution: MarketResolution; timestamp: Date }
+  | { type: 'METRICS_UPDATED'; metrics: StrategyMetricData; timestamp: Date };

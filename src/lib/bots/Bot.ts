@@ -450,6 +450,7 @@ export class Bot {
       noPrices: noPrices ? { bestBid: noPrices.bestBid, bestAsk: noPrices.bestAsk } : undefined,
       botStartTime: this.startedAt,
       marketEndTime: this.marketEndTime,
+      emitEvent: (event) => this.emitEvent(event),
     };
 
     // Execute strategy

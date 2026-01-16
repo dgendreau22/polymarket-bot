@@ -10,6 +10,7 @@ import { getBotManager } from '@/lib/bots/BotManager';
 import { getTrades, rowToTrade } from '@/lib/persistence/TradeRepository';
 import { getOpenOrdersByBotId, rowToLimitOrder } from '@/lib/persistence/LimitOrderRepository';
 import { getPositionsByBotId, rowToPosition } from '@/lib/persistence/BotRepository';
+import { getMetricsByBotId, rowToMetric } from '@/lib/persistence/StrategyMetricsRepository';
 import type { BotEvent } from '@/lib/bots/types';
 import { error } from '@/lib/logger';
 
@@ -65,6 +66,11 @@ export async function GET(
         const orderRows = getOpenOrdersByBotId(id);
         const orders = orderRows.map(rowToLimitOrder);
         send('orders', orders);
+
+        // Send strategy metrics (for TimeAbove50 parameter charting)
+        const metricRows = getMetricsByBotId(id);
+        const metrics = metricRows.map(rowToMetric);
+        send('metrics', metrics);
       };
 
       // Send initial state immediately
@@ -73,6 +79,12 @@ export async function GET(
       // Subscribe to bot events
       const eventHandler = (event: BotEvent) => {
         send('event', event);
+
+        // Handle METRICS_UPDATED events - send immediately to chart
+        if (event.type === 'METRICS_UPDATED') {
+          send('metrics_update', [event.metrics]);
+          return;
+        }
 
         // For trade/fill/resolution/state-change events, send updated data
         const dataRefreshEvents = [

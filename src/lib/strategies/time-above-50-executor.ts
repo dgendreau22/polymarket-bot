@@ -28,6 +28,7 @@ import {
   DecisionEngine,
   SignalFactory,
 } from './time-above-50/index';
+import { createStrategyMetric } from '../persistence/StrategyMetricsRepository';
 
 // Strategy constants
 const MAX_PRICE_DISTANCE = 0.02;  // 2% max distance for stale order detection
@@ -149,6 +150,19 @@ export class TimeAbove50Executor implements IStrategyExecutor {
       `dq=${exposure.dq >= 0 ? '+' : ''}${exposure.dq.toFixed(0)}`
     );
 
+    // Save metrics for charting and emit event for real-time updates
+    this.saveMetrics(
+      botId,
+      now,
+      signal,
+      exposure,
+      consensus.consensusPrice,
+      inv_yes,
+      inv_no,
+      positions,
+      context.emitEvent
+    );
+
     // 8. Check spread gates
     const spreadCheck = this.riskValidator!.checkSpreadGates(
       consensus.spread_c,
@@ -244,5 +258,72 @@ export class TimeAbove50Executor implements IStrategyExecutor {
     const endTime = marketEndTime.getTime();
     const remainingMs = Math.max(0, endTime - now);
     return remainingMs / 60000; // Convert to minutes
+  }
+
+  /**
+   * Save strategy metrics to database for charting and emit real-time event
+   */
+  private saveMetrics(
+    botId: string,
+    timestamp: number,
+    signal: { tau: number; A: number; E: number; theta: number; dbar: number; inDeadband: boolean },
+    exposure: { q_star: number },
+    consensusPrice: number,
+    inv_yes: number,
+    inv_no: number,
+    positions: StrategyContext['positions'],
+    emitEvent?: StrategyContext['emitEvent']
+  ): void {
+    try {
+
+      // Calculate total PnL from positions
+      let totalPnl = 0;
+      if (positions && positions.length > 0) {
+        for (const pos of positions) {
+          const realizedPnl = parseFloat(pos.realizedPnl || '0');
+          const size = parseFloat(pos.size || '0');
+          const avgEntry = parseFloat(pos.avgEntryPrice || '0');
+
+          // Unrealized PnL: (currentPrice - avgEntry) * size
+          // For YES: use consensusPrice, for NO: use (1 - consensusPrice)
+          let unrealizedPnl = 0;
+          if (size > 0 && avgEntry > 0) {
+            const currentPrice = pos.outcome === 'YES' ? consensusPrice : (1 - consensusPrice);
+            unrealizedPnl = (currentPrice - avgEntry) * size;
+          }
+
+          totalPnl += realizedPnl + unrealizedPnl;
+        }
+      }
+
+      const metricsData = {
+        botId,
+        timestamp,
+        tau: signal.A,  // Store A (time-above score) in tau field: A = 2*tau - 1, range [-1, 1]
+        edge: signal.E,
+        qStar: exposure.q_star,
+        theta: signal.theta,
+        delta: signal.dbar,  // Store dbar (smoothed displacement) in delta field
+        price: consensusPrice,
+        positionYes: inv_yes,
+        positionNo: inv_no,
+        totalPnl,
+      };
+
+      // Save to database
+      createStrategyMetric(metricsData);
+
+      // Emit event for real-time chart updates
+      if (emitEvent) {
+        emitEvent({
+          type: 'METRICS_UPDATED',
+          metrics: metricsData,
+          timestamp: new Date(),
+        });
+      }
+    } catch (err) {
+      // Don't let metrics errors affect strategy execution
+      log('TimeAbove50', `Failed to save metrics for ${botId}: ${err}`);
+    }
   }
 }

@@ -12,8 +12,9 @@ import {
 import { Countdown } from "@/components/ui/countdown";
 import { BotStatusBadge, BotControls } from "@/components/bots";
 import { TradesTable } from "@/components/trades";
-import { PriceChart } from "@/components/charts";
+import { PriceChart, StrategyChart } from "@/components/charts";
 import { OrderPanel } from "@/components/orders";
+import type { StrategyMetric } from "@/lib/persistence/StrategyMetricsRepository";
 const POLL_INTERVAL_MS = 3000;
 
 import {
@@ -76,6 +77,9 @@ export default function BotDetailPage() {
   // Pending orders sort state
   const [orderSortColumn, setOrderSortColumn] = useState<OrderSortColumn>('price');
   const [orderSortDirection, setOrderSortDirection] = useState<SortDirection>('desc');
+
+  // Strategy metrics state (for TimeAbove50 parameter charting)
+  const [strategyMetrics, setStrategyMetrics] = useState<StrategyMetric[]>([]);
 
   // Calculate decimal places from tick size
   const getDecimals = useCallback((tick: string) => {
@@ -271,6 +275,26 @@ export default function BotDetailPage() {
         setActiveOrders(ordersData);
       } catch (err) {
         console.error("[SSE] Failed to parse orders data:", err);
+      }
+    });
+
+    // Handle initial metrics (full data)
+    eventSource.addEventListener("metrics", (e) => {
+      try {
+        const metricsData = JSON.parse(e.data);
+        setStrategyMetrics(metricsData);
+      } catch (err) {
+        console.error("[SSE] Failed to parse metrics data:", err);
+      }
+    });
+
+    // Handle metrics updates (incremental)
+    eventSource.addEventListener("metrics_update", (e) => {
+      try {
+        const newMetrics = JSON.parse(e.data);
+        setStrategyMetrics(prev => [...prev, ...newMetrics]);
+      } catch (err) {
+        console.error("[SSE] Failed to parse metrics update:", err);
       }
     });
 
@@ -1047,6 +1071,14 @@ export default function BotDetailPage() {
             onOrderSubmitted={fetchData}
           />
         </div>
+
+        {/* Strategy Parameters Chart (TimeAbove50 only) */}
+        {bot.config.strategySlug === 'time-above-50' && (
+          <div className="bg-card border rounded-lg p-6 mb-6">
+            <h2 className="font-semibold mb-3">Strategy Parameters</h2>
+            <StrategyChart metrics={strategyMetrics} />
+          </div>
+        )}
 
         {/* Market Data, Pending Orders & Recent Trades - Side by Side */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6 lg:h-[700px]">

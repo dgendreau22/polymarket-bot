@@ -83,8 +83,21 @@ export function cleanupBotState(botId: string): void {
 // Register Built-in Strategies
 // ============================================================================
 
+// Use globalThis to persist executors across hot-reloads (preserves state like dbar, tau)
+const globalExecutors = globalThis as unknown as {
+  _timeAbove50Executor?: TimeAbove50Executor;
+};
+
+// Get or create TimeAbove50 executor (persisted across hot-reloads)
+function getTimeAbove50Executor(): TimeAbove50Executor {
+  if (!globalExecutors._timeAbove50Executor) {
+    globalExecutors._timeAbove50Executor = new TimeAbove50Executor();
+  }
+  return globalExecutors._timeAbove50Executor;
+}
+
 // Register built-in executors
 registerStrategy('test-oscillator', new TestOscillatorExecutor());
 registerStrategy('market-maker', new MarketMakerExecutor());
 registerStrategy('arbitrage', new ArbitrageExecutor());
-registerStrategy('time-above-50', new TimeAbove50Executor());
+registerStrategy('time-above-50', getTimeAbove50Executor());

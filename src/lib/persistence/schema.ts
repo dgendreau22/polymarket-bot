@@ -166,6 +166,33 @@ export function initializeSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_market_snapshots_timestamp ON market_snapshots(timestamp);
   `);
 
+  // ============================================================================
+  // Strategy Metrics Table (for TimeAbove50 parameter charting)
+  // ============================================================================
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS strategy_metrics (
+      id TEXT PRIMARY KEY,
+      bot_id TEXT NOT NULL,
+      timestamp INTEGER NOT NULL,
+      tau REAL,
+      edge REAL,
+      q_star REAL,
+      theta REAL,
+      delta REAL,
+      price REAL,
+      position_yes REAL DEFAULT 0,
+      position_no REAL DEFAULT 0,
+      total_pnl REAL,
+      FOREIGN KEY (bot_id) REFERENCES bots(id) ON DELETE CASCADE
+    )
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_strategy_metrics_bot_timestamp
+      ON strategy_metrics(bot_id, timestamp DESC);
+  `);
+
   // Migration: Add market_name column to bots table if it doesn't exist
   try {
     db.exec(`ALTER TABLE bots ADD COLUMN market_name TEXT`);
@@ -296,6 +323,7 @@ export function initializeSchema(db: Database.Database): void {
  */
 export function dropAllTables(db: Database.Database): void {
   db.exec(`
+    DROP TABLE IF EXISTS strategy_metrics;
     DROP TABLE IF EXISTS limit_orders;
     DROP TABLE IF EXISTS positions;
     DROP TABLE IF EXISTS trades;
