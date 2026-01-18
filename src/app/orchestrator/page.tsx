@@ -28,6 +28,7 @@ import type {
   OrchestratorStatus,
   OrchestratorEvent,
 } from "@/lib/bots/Orchestrator";
+import type { StrategyPreset } from "@/lib/persistence/StrategyPresetsRepository";
 
 // Pattern to match Bitcoin 15-minute markets
 const BTC_15M_PATTERN = /Bitcoin Up or Down/i;
@@ -49,6 +50,10 @@ export default function OrchestratorPage() {
   const [mode, setMode] = useState<"live" | "dry_run">("dry_run");
   const [leadTimeMinutes, setLeadTimeMinutes] = useState(5);
   const [strategyConfig, setStrategyConfig] = useState<Record<string, unknown>>({});
+
+  // Preset state
+  const [presets, setPresets] = useState<StrategyPreset[]>([]);
+  const [selectedPresetId, setSelectedPresetId] = useState<string>("");
 
   // Fetch initial status
   const fetchStatus = useCallback(async () => {
@@ -250,6 +255,53 @@ export default function OrchestratorPage() {
     setStrategyConfig((prev) => ({ ...prev, [name]: value }));
   };
 
+  // Fetch presets when strategy changes
+  useEffect(() => {
+    const fetchPresets = async () => {
+      if (!strategy) {
+        setPresets([]);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/strategies/presets?strategy=${strategy}`);
+        const data = await res.json();
+        if (data.success) {
+          setPresets(data.data);
+        }
+      } catch (err) {
+        console.error("Failed to fetch presets:", err);
+      }
+    };
+    fetchPresets();
+    // Reset preset selection when strategy changes
+    setSelectedPresetId("");
+  }, [strategy]);
+
+  // Handle preset selection
+  const handlePresetChange = (presetId: string) => {
+    setSelectedPresetId(presetId);
+    if (!presetId) {
+      // Reset to strategy defaults
+      if (selectedStrategy?.parameters) {
+        const defaults: Record<string, unknown> = {};
+        selectedStrategy.parameters.forEach((param) => {
+          defaults[param.name] = param.default;
+        });
+        setStrategyConfig(defaults);
+      }
+      return;
+    }
+    // Apply ALL preset params (including those not exposed in UI)
+    const preset = presets.find((p) => p.id === presetId);
+    if (preset) {
+      // Preset params contain all optimized parameters, apply them all
+      setStrategyConfig({ ...preset.params });
+    }
+  };
+
+  // Get the selected preset for display
+  const selectedPreset = presets.find((p) => p.id === selectedPresetId);
+
   // Countdown timer for scheduled state
   useEffect(() => {
     if (!status?.scheduledStartTime) {
@@ -416,6 +468,52 @@ export default function OrchestratorPage() {
               />
             </div>
           </div>
+
+          {/* Load Preset Selector - only show if presets exist */}
+          {presets.length > 0 && (
+            <div className="mt-4 pt-4 border-t">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-medium">Load Optimized Preset</h3>
+                {selectedPreset && (
+                  <span className="text-xs text-green-500">
+                    {Object.keys(selectedPreset.params).length} optimized parameters loaded
+                  </span>
+                )}
+              </div>
+              <select
+                value={selectedPresetId}
+                onChange={(e) => handlePresetChange(e.target.value)}
+                className="w-full p-2 border rounded bg-background text-foreground"
+                disabled={isRunning}
+              >
+                <option value="">Default parameters</option>
+                {presets.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.name}
+                    {preset.finalSharpe !== undefined && preset.finalSharpe !== null && (
+                      ` (SR: ${preset.finalSharpe.toFixed(2)})`
+                    )}
+                  </option>
+                ))}
+              </select>
+              {selectedPreset && (
+                <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
+                  {selectedPreset.finalSharpe !== undefined && selectedPreset.finalSharpe !== null && (
+                    <span>Sharpe: <span className="font-medium text-foreground">{selectedPreset.finalSharpe.toFixed(3)}</span></span>
+                  )}
+                  {selectedPreset.finalPnl !== undefined && selectedPreset.finalPnl !== null && (
+                    <span>PnL: <span className={`font-medium ${selectedPreset.finalPnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>${selectedPreset.finalPnl.toFixed(2)}</span></span>
+                  )}
+                  {selectedPreset.finalWinRate !== undefined && selectedPreset.finalWinRate !== null && (
+                    <span>Win Rate: <span className="font-medium text-foreground">{(selectedPreset.finalWinRate * 100).toFixed(1)}%</span></span>
+                  )}
+                  {selectedPreset.description && (
+                    <span className="w-full text-muted-foreground">{selectedPreset.description}</span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Strategy Parameters */}
           {selectedStrategy?.parameters && selectedStrategy.parameters.length > 0 && (

@@ -193,6 +193,120 @@ export function initializeSchema(db: Database.Database): void {
       ON strategy_metrics(bot_id, timestamp DESC);
   `);
 
+  // ============================================================================
+  // Backtest Runs Table (for storing backtest results)
+  // ============================================================================
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS backtest_runs (
+      id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      strategy_slug TEXT NOT NULL,
+      session_ids TEXT NOT NULL,
+      strategy_params TEXT NOT NULL,
+      initial_capital REAL NOT NULL,
+      total_pnl REAL NOT NULL,
+      total_return REAL NOT NULL,
+      sharpe_ratio REAL NOT NULL,
+      max_drawdown REAL NOT NULL,
+      win_rate REAL NOT NULL,
+      trade_count INTEGER NOT NULL,
+      results TEXT NOT NULL
+    )
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_backtest_runs_created_at
+      ON backtest_runs(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_backtest_runs_strategy
+      ON backtest_runs(strategy_slug);
+  `);
+
+  // ============================================================================
+  // Optimization Runs Table (for storing phased optimization results)
+  // ============================================================================
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS optimization_runs (
+      id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      strategy_slug TEXT NOT NULL,
+      session_ids TEXT NOT NULL,
+      optimization_type TEXT NOT NULL CHECK(optimization_type IN ('grid', 'phased')),
+      phases_config TEXT NOT NULL,
+      initial_capital REAL NOT NULL,
+      total_combinations_tested INTEGER NOT NULL,
+      duration_seconds REAL NOT NULL,
+      final_params TEXT NOT NULL,
+      final_sharpe REAL NOT NULL,
+      final_pnl REAL NOT NULL,
+      final_win_rate REAL NOT NULL,
+      results TEXT NOT NULL
+    )
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_optimization_runs_created_at
+      ON optimization_runs(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_optimization_runs_strategy
+      ON optimization_runs(strategy_slug);
+    CREATE INDEX IF NOT EXISTS idx_optimization_runs_type
+      ON optimization_runs(optimization_type);
+  `);
+
+  // Phase results table (for storing individual phase results)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS phase_results (
+      id TEXT PRIMARY KEY,
+      optimization_run_id TEXT NOT NULL REFERENCES optimization_runs(id) ON DELETE CASCADE,
+      phase_number INTEGER NOT NULL,
+      phase_name TEXT NOT NULL,
+      combinations_tested INTEGER NOT NULL,
+      duration_seconds REAL NOT NULL,
+      best_params TEXT NOT NULL,
+      best_sharpe REAL NOT NULL,
+      best_pnl REAL NOT NULL,
+      skipped INTEGER NOT NULL DEFAULT 0,
+      skip_reason TEXT,
+      top_results TEXT NOT NULL
+    )
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_phase_results_run_id
+      ON phase_results(optimization_run_id);
+    CREATE INDEX IF NOT EXISTS idx_phase_results_phase
+      ON phase_results(phase_number);
+  `);
+
+  // ============================================================================
+  // Strategy Presets Table (for saving optimized parameters)
+  // ============================================================================
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS strategy_presets (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      strategy_slug TEXT NOT NULL,
+      description TEXT,
+      params TEXT NOT NULL,
+      source_optimization_id TEXT,
+      final_sharpe REAL,
+      final_pnl REAL,
+      final_win_rate REAL,
+      created_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_strategy_presets_strategy
+      ON strategy_presets(strategy_slug);
+    CREATE INDEX IF NOT EXISTS idx_strategy_presets_created_at
+      ON strategy_presets(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_strategy_presets_sharpe
+      ON strategy_presets(final_sharpe DESC);
+  `);
+
   // Migration: Add market_name column to bots table if it doesn't exist
   try {
     db.exec(`ALTER TABLE bots ADD COLUMN market_name TEXT`);
@@ -323,6 +437,10 @@ export function initializeSchema(db: Database.Database): void {
  */
 export function dropAllTables(db: Database.Database): void {
   db.exec(`
+    DROP TABLE IF EXISTS strategy_presets;
+    DROP TABLE IF EXISTS phase_results;
+    DROP TABLE IF EXISTS optimization_runs;
+    DROP TABLE IF EXISTS backtest_runs;
     DROP TABLE IF EXISTS strategy_metrics;
     DROP TABLE IF EXISTS limit_orders;
     DROP TABLE IF EXISTS positions;
