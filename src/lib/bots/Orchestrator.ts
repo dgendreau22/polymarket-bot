@@ -12,6 +12,7 @@ import { getGammaClient } from '../polymarket/client';
 import { getETOffsetMinutes, formatTime12Hour } from '../utils/time';
 import type { BotConfig, BotMode, BotEvent } from './types';
 import { log, error } from '@/lib/logger';
+import { getDataRecorder } from '@/lib/data';
 
 // ============================================================================
 // Types
@@ -37,6 +38,7 @@ export interface OrchestratorConfig {
   strategyConfig?: Record<string, unknown>;
   leadTimeMinutes: number;
   enabled: boolean;
+  recordData: boolean;  // Whether to record market data during trading sessions
 }
 
 /** Bot info for display */
@@ -87,6 +89,7 @@ class Orchestrator {
     mode: 'dry_run',
     leadTimeMinutes: 5,
     enabled: false,
+    recordData: true,  // Default: record market data
   };
 
   // Track the next scheduled market (waiting for bot start time)
@@ -104,6 +107,7 @@ class Orchestrator {
   private runningBotIds: Set<string> = new Set();
 
   private searchInterval: NodeJS.Timeout | null = null;
+  private scheduledRecordingTimers: Map<string, NodeJS.Timeout> = new Map();
   private botHistory: OrchestratorBotInfo[] = [];
   private eventHandlers: OrchestratorEventHandler[] = [];
   private lastError: string | null = null;
@@ -164,6 +168,11 @@ class Orchestrator {
       clearInterval(this.searchInterval);
       this.searchInterval = null;
     }
+    // Cancel all scheduled recordings
+    for (const timer of this.scheduledRecordingTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.scheduledRecordingTimers.clear();
 
     this.nextScheduledMarket = null;
     this.nextScheduledStartTime = null;
@@ -487,6 +496,72 @@ class Orchestrator {
     this.nextScheduledTimer = setTimeout(async () => {
       await this.createBot(market);
     }, delayMs);
+
+    // Schedule recording to start at market start time (not bot start time)
+    if (this.config.recordData && market.assetId && market.noAssetId) {
+      this.scheduleRecordingForMarket(market);
+    }
+  }
+
+  /**
+   * Schedule recording to start at market open time
+   * Recording is independent of bot start time (bot starts early, recording starts at market open)
+   */
+  private scheduleRecordingForMarket(market: ScheduledMarket): void {
+    // Skip if already scheduled for this market
+    if (this.scheduledRecordingTimers.has(market.marketId)) {
+      log('Orchestrator', `Recording already scheduled for ${market.marketName}`);
+      return;
+    }
+
+    const now = Date.now();
+    const delayMs = market.startTime.getTime() - now;
+
+    if (delayMs <= 0) {
+      // Market already started, begin recording immediately
+      this.startRecordingForMarket(market);
+      return;
+    }
+
+    log('Orchestrator', `Recording scheduled for ${market.marketName} at ${market.startTime.toLocaleString()}`);
+
+    const timer = setTimeout(() => {
+      this.scheduledRecordingTimers.delete(market.marketId);
+      this.startRecordingForMarket(market);
+    }, delayMs);
+
+    this.scheduledRecordingTimers.set(market.marketId, timer);
+  }
+
+  /**
+   * Start recording for a market with explicit time boundaries
+   * Uses market's official start/end times for the recording session
+   */
+  private async startRecordingForMarket(market: ScheduledMarket): Promise<void> {
+    if (!market.assetId || !market.noAssetId) {
+      error('Orchestrator', `Cannot start recording: missing asset IDs for ${market.marketName}`);
+      return;
+    }
+
+    const recorder = getDataRecorder();
+
+    // Build event slug from market start timestamp
+    const timestamp = Math.floor(market.startTime.getTime() / 1000);
+    const eventSlug = `btc-updown-15m-${timestamp}`;
+
+    try {
+      await recorder.startRecordingForMarket({
+        marketId: market.marketId,
+        marketName: market.marketName,
+        eventSlug,
+        yesAssetId: market.assetId,
+        noAssetId: market.noAssetId,
+      }, market.startTime, market.endTime);
+
+      log('Orchestrator', `Recording started for ${market.marketName}`);
+    } catch (err) {
+      error('Orchestrator', `Failed to start recording for ${market.marketName}:`, err);
+    }
   }
 
   /**
@@ -587,6 +662,9 @@ class Orchestrator {
         clearInterval(updateInterval);
 
         log('Orchestrator', `Bot ${botId} stopped, updating history...`);
+
+        // Note: Recording ends at scheduled market end time (sharp cutoff),
+        // not when bot stops (which can be delayed by Polymarket events)
 
         // Remove from running bots
         this.runningBotIds.delete(botId);

@@ -50,6 +50,7 @@ export default function OrchestratorPage() {
   const [mode, setMode] = useState<"live" | "dry_run">("dry_run");
   const [leadTimeMinutes, setLeadTimeMinutes] = useState(5);
   const [strategyConfig, setStrategyConfig] = useState<Record<string, unknown>>({});
+  const [recordData, setRecordData] = useState(true);
 
   // Preset state
   const [presets, setPresets] = useState<StrategyPreset[]>([]);
@@ -69,6 +70,9 @@ export default function OrchestratorPage() {
           setLeadTimeMinutes(data.data.config.leadTimeMinutes);
           if (data.data.config.strategyConfig) {
             setStrategyConfig(data.data.config.strategyConfig);
+          }
+          if (data.data.config.recordData !== undefined) {
+            setRecordData(data.data.config.recordData);
           }
         }
       } else {
@@ -122,6 +126,7 @@ export default function OrchestratorPage() {
           mode,
           leadTimeMinutes,
           strategyConfig,
+          recordData,
         }),
       });
       const data = await res.json();
@@ -466,6 +471,31 @@ export default function OrchestratorPage() {
                 min={1}
                 max={15}
               />
+            </div>
+
+            {/* Data Recording Toggle */}
+            <div className="col-span-1 md:col-span-3 mt-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={recordData}
+                  onChange={(e) => setRecordData(e.target.checked)}
+                  disabled={isRunning}
+                  className="w-4 h-4 rounded border-muted-foreground"
+                />
+                <span className="text-sm">Record market data for analysis</span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p className="max-w-xs">
+                      Records tick data and order book snapshots during market sessions.
+                      Data collection starts at market open time, not when bots start.
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              </label>
             </div>
           </div>
 

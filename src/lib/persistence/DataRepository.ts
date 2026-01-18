@@ -135,6 +135,15 @@ export function getRecordingSessionByEventSlug(eventSlug: string): RecordingSess
 }
 
 /**
+ * End a recording session by event slug
+ */
+export function endSessionByEventSlug(eventSlug: string): void {
+  const db = getDatabase();
+  db.prepare('UPDATE recording_sessions SET ended_at = ? WHERE event_slug = ? AND ended_at IS NULL')
+    .run(new Date().toISOString(), eventSlug);
+}
+
+/**
  * Update session stats (tick count, snapshot count, ended_at)
  */
 export function updateSessionStats(

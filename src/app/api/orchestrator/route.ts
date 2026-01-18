@@ -54,6 +54,7 @@ export async function POST(request: NextRequest) {
       mode: body.mode || 'dry_run',
       leadTimeMinutes: leadTime,
       strategyConfig: body.strategyConfig,
+      recordData: body.recordData !== false,  // Default true if not specified
     });
 
     return NextResponse.json({

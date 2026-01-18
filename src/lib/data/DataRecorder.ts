@@ -17,6 +17,7 @@ import {
   getRecordingSessionByEventSlug,
   incrementTickCount,
   incrementSnapshotCount,
+  endSessionByEventSlug,
 } from '@/lib/persistence/DataRepository';
 import type {
   RecorderStatus,
@@ -38,6 +39,7 @@ export class DataRecorder {
   private ws: PolymarketWebSocket | null = null;
   private discoveryTimer: ReturnType<typeof setInterval> | null = null;
   private snapshotTimer: ReturnType<typeof setInterval> | null = null;
+  private sessionEndTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private eventHandlers: Set<RecorderEventHandler> = new Set();
 
   // Current market data for snapshots
@@ -107,6 +109,12 @@ export class DataRecorder {
       this.snapshotTimer = null;
     }
 
+    // Clear all session end timers
+    for (const timer of this.sessionEndTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.sessionEndTimers.clear();
+
     // Disconnect WebSocket
     if (this.ws) {
       this.ws.disconnect();
@@ -119,6 +127,127 @@ export class DataRecorder {
     }
 
     this.setState('idle');
+  }
+
+  /**
+   * End recording for a specific market by event slug
+   * Called by Orchestrator when bot stops (market closes)
+   */
+  endRecordingForMarket(eventSlug: string): void {
+    console.log(`[DataRecorder] Ending session for ${eventSlug}`);
+    endSessionByEventSlug(eventSlug);
+
+    // If this was the current session, clean up
+    if (this.currentSession) {
+      // Check if current session matches this event slug by comparing timestamps
+      const currentEventSlug = `btc-updown-15m-${Math.floor(new Date(this.currentSession.startTime).getTime() / 1000)}`;
+      if (currentEventSlug === eventSlug) {
+        this.endSession();
+        this.setState('idle');
+      }
+    }
+  }
+
+  /**
+   * Start recording for a specific market with explicit time boundaries
+   * Called by Orchestrator to align recording with market open/close times
+   */
+  async startRecordingForMarket(
+    market: {
+      marketId: string;
+      marketName: string;
+      eventSlug: string;
+      yesAssetId: string;
+      noAssetId: string;
+    },
+    startTime: Date,
+    endTime: Date
+  ): Promise<void> {
+    // Check if already recording this market
+    if (this.state === 'recording' && this.currentSession?.marketId === market.marketId) {
+      console.log(`[DataRecorder] Already recording market ${market.marketId}`);
+      return;
+    }
+
+    // Check if session already exists (avoid duplicate recording)
+    const existing = getRecordingSessionByEventSlug(market.eventSlug);
+    if (existing) {
+      console.log(`[DataRecorder] Session already exists for ${market.eventSlug}`);
+      return;
+    }
+
+    // Create recording session with market's official start time
+    const session = createRecordingSession({
+      marketId: market.marketId,
+      marketName: market.marketName,
+      eventSlug: market.eventSlug,
+      yesAssetId: market.yesAssetId,
+      noAssetId: market.noAssetId,
+      startTime: startTime.toISOString(),  // Use market start, not now()
+      endTime: endTime.toISOString(),
+    });
+
+    this.currentSession = {
+      id: session.id,
+      marketId: market.marketId,
+      marketName: market.marketName,
+      tickCount: 0,
+      snapshotCount: 0,
+      startTime: startTime.toISOString(),
+      endTime: endTime.toISOString(),
+    };
+
+    this.tickCount = 0;
+    this.snapshotCount = 0;
+    this.yesOrderBook = null;
+    this.noOrderBook = null;
+
+    this.setState('recording');
+    this.emitEvent({
+      type: 'SESSION_STARTED',
+      sessionId: session.id,
+      marketId: market.marketId,
+      marketName: market.marketName,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Connect WebSocket and subscribe to market data
+    this.ws = new PolymarketWebSocket();
+    await this.ws.connect();
+
+    // Subscribe to order book updates for snapshots
+    this.ws.subscribeOrderBook([market.yesAssetId], (orderBook) => {
+      this.yesOrderBook = orderBook;
+    });
+    this.ws.subscribeOrderBook([market.noAssetId], (orderBook) => {
+      this.noOrderBook = orderBook;
+    });
+
+    // Subscribe to trades for ticks
+    this.ws.subscribeTrades([market.yesAssetId], (trade) => {
+      this.recordTick(trade, 'YES');
+    });
+    this.ws.subscribeTrades([market.noAssetId], (trade) => {
+      this.recordTick(trade, 'NO');
+    });
+
+    // Start snapshot timer
+    this.snapshotTimer = setInterval(() => {
+      this.saveSnapshotData();
+    }, SNAPSHOT_INTERVAL_MS);
+
+    // Schedule session end at exact market end time (sharp cutoff)
+    const msUntilEnd = endTime.getTime() - Date.now();
+    if (msUntilEnd > 0) {
+      const timer = setTimeout(() => {
+        this.sessionEndTimers.delete(market.eventSlug);
+        this.endRecordingForMarket(market.eventSlug);
+      }, msUntilEnd);
+      this.sessionEndTimers.set(market.eventSlug, timer);
+    }
+
+    console.log(`[DataRecorder] Recording started for ${market.marketName}`);
+    console.log(`[DataRecorder] Session ends at ${endTime.toISOString()} (sharp cutoff)`);
   }
 
   /**
