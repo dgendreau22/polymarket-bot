@@ -27,7 +27,7 @@ import type {
 } from './types';
 
 const BITCOIN_15MIN_SLUG_PREFIX = 'will-bitcoin-go-up-or-down-in-the-next-15-minutes';
-const SNAPSHOT_INTERVAL_MS = 15000; // 15 seconds
+const SNAPSHOT_INTERVAL_MS = 2000; // 2 seconds (high-resolution for accurate backtesting)
 const MARKET_DISCOVERY_INTERVAL_MS = 30000; // 30 seconds
 
 export class DataRecorder {
@@ -390,11 +390,27 @@ export class DataRecorder {
 
     const timestamp = new Date().toISOString();
 
-    // Extract best bid/ask from order books
-    const yesBestBid = this.yesOrderBook?.bids[0]?.price;
-    const yesBestAsk = this.yesOrderBook?.asks[0]?.price;
-    const noBestBid = this.noOrderBook?.bids[0]?.price;
-    const noBestAsk = this.noOrderBook?.asks[0]?.price;
+    // Sort bids descending (highest first = best bid)
+    const sortedYesBids = [...(this.yesOrderBook?.bids || [])].sort(
+      (a, b) => parseFloat(b.price) - parseFloat(a.price)
+    );
+    const sortedNoBids = [...(this.noOrderBook?.bids || [])].sort(
+      (a, b) => parseFloat(b.price) - parseFloat(a.price)
+    );
+
+    // Sort asks ascending (lowest first = best ask)
+    const sortedYesAsks = [...(this.yesOrderBook?.asks || [])].sort(
+      (a, b) => parseFloat(a.price) - parseFloat(b.price)
+    );
+    const sortedNoAsks = [...(this.noOrderBook?.asks || [])].sort(
+      (a, b) => parseFloat(a.price) - parseFloat(b.price)
+    );
+
+    // Extract best bid/ask from sorted order books
+    const yesBestBid = sortedYesBids[0]?.price;
+    const yesBestAsk = sortedYesAsks[0]?.price;
+    const noBestBid = sortedNoBids[0]?.price;
+    const noBestAsk = sortedNoAsks[0]?.price;
 
     // Calculate combined cost (YES ask + NO ask)
     let combinedCost: string | undefined;
@@ -415,10 +431,10 @@ export class DataRecorder {
       yesBestAsk,
       noBestBid,
       noBestAsk,
-      yesBidDepth: this.yesOrderBook?.bids.slice(0, 5).map((b) => `${b.price}:${b.size}`),
-      yesAskDepth: this.yesOrderBook?.asks.slice(0, 5).map((a) => `${a.price}:${a.size}`),
-      noBidDepth: this.noOrderBook?.bids.slice(0, 5).map((b) => `${b.price}:${b.size}`),
-      noAskDepth: this.noOrderBook?.asks.slice(0, 5).map((a) => `${a.price}:${a.size}`),
+      yesBidDepth: sortedYesBids.slice(0, 5).map((b) => `${b.price}:${b.size}`),
+      yesAskDepth: sortedYesAsks.slice(0, 5).map((a) => `${a.price}:${a.size}`),
+      noBidDepth: sortedNoBids.slice(0, 5).map((b) => `${b.price}:${b.size}`),
+      noAskDepth: sortedNoAsks.slice(0, 5).map((a) => `${a.price}:${a.size}`),
       combinedCost,
       spread,
     });

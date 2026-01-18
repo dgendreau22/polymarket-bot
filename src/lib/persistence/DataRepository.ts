@@ -388,6 +388,21 @@ export function getSnapshotCount(sessionId: string): number {
   return result.count;
 }
 
+/**
+ * Get all snapshots for multiple sessions, ordered by timestamp
+ */
+export function getSnapshotsForSessions(sessionIds: string[]): MarketSnapshotRow[] {
+  if (sessionIds.length === 0) return [];
+
+  const db = getDatabase();
+  const placeholders = sessionIds.map(() => '?').join(', ');
+  return db.prepare(`
+    SELECT * FROM market_snapshots
+    WHERE session_id IN (${placeholders})
+    ORDER BY timestamp ASC
+  `).all(...sessionIds) as MarketSnapshotRow[];
+}
+
 // ============================================================================
 // Statistics & Aggregation
 // ============================================================================

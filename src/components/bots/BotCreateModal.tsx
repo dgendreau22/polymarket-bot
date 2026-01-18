@@ -4,8 +4,17 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { X, Loader2 } from "lucide-react";
+import { X, Loader2, Sparkles } from "lucide-react";
 import type { StrategyDefinition } from "@/lib/bots/types";
+
+interface Preset {
+  id: string;
+  name: string;
+  strategySlug: string;
+  params: Record<string, number>;
+  finalSharpe?: number;
+  finalPnl?: number;
+}
 
 interface BotCreateModalProps {
   isOpen: boolean;
@@ -26,6 +35,8 @@ export function BotCreateModal({
 }: BotCreateModalProps) {
   const router = useRouter();
   const [strategies, setStrategies] = useState<StrategyDefinition[]>([]);
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [selectedPresetId, setSelectedPresetId] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -66,6 +77,28 @@ export function BotCreateModal({
   // Get the currently selected strategy
   const selectedStrategy = strategies.find((s) => s.slug === strategySlug);
 
+  // Fetch presets when strategy changes
+  useEffect(() => {
+    const fetchPresets = async () => {
+      if (!strategySlug) {
+        setPresets([]);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/strategies/presets?strategy=${strategySlug}`);
+        const data = await res.json();
+        if (data.success) {
+          setPresets(data.data);
+        }
+      } catch (err) {
+        console.error("Failed to fetch presets:", err);
+      }
+    };
+    fetchPresets();
+    // Reset preset selection when strategy changes
+    setSelectedPresetId("");
+  }, [strategySlug]);
+
   // Initialize strategyConfig with defaults when strategy changes
   useEffect(() => {
     if (selectedStrategy?.parameters) {
@@ -76,6 +109,26 @@ export function BotCreateModal({
       setStrategyConfig(defaults);
     }
   }, [selectedStrategy]);
+
+  // Apply preset params when preset is selected
+  const handlePresetChange = (presetId: string) => {
+    setSelectedPresetId(presetId);
+    if (!presetId) {
+      // Reset to defaults
+      if (selectedStrategy?.parameters) {
+        const defaults: Record<string, unknown> = {};
+        selectedStrategy.parameters.forEach((param) => {
+          defaults[param.name] = param.default;
+        });
+        setStrategyConfig(defaults);
+      }
+      return;
+    }
+    const preset = presets.find((p) => p.id === presetId);
+    if (preset) {
+      setStrategyConfig(preset.params);
+    }
+  };
 
   // Update a single parameter value
   const updateParam = (name: string, value: unknown) => {
@@ -198,6 +251,36 @@ export function BotCreateModal({
               </p>
             )}
           </div>
+
+          {/* Preset Selector */}
+          {presets.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                <span className="flex items-center gap-1">
+                  <Sparkles className="w-4 h-4 text-yellow-500" />
+                  Load Preset
+                </span>
+              </label>
+              <select
+                value={selectedPresetId}
+                onChange={(e) => handlePresetChange(e.target.value)}
+                className="w-full border rounded-md px-3 py-2 bg-background"
+              >
+                <option value="">Default parameters</option>
+                {presets.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.name}
+                    {preset.finalSharpe !== undefined && ` (SR: ${preset.finalSharpe.toFixed(2)})`}
+                  </option>
+                ))}
+              </select>
+              {selectedPresetId && (
+                <p className="text-xs text-green-600 dark:text-green-400 mt-1">
+                  Optimized parameters loaded
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Strategy Parameters */}
           {selectedStrategy?.parameters && selectedStrategy.parameters.length > 0 && (
