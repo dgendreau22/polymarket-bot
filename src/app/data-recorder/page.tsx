@@ -13,11 +13,15 @@ import {
   BarChart3,
   Clock,
   Trash2,
+  CheckCircle2,
+  AlertTriangle,
+  XCircle,
+  ShieldCheck,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { PriceChart } from "@/components/charts";
 import type { RecorderStatus, RecorderEvent } from "@/lib/data";
-import type { RecordingSessionRow, MarketTickRow } from "@/lib/persistence/DataRepository";
+import type { RecordingSessionRow, MarketTickRow, ValidationResult } from "@/lib/persistence/DataRepository";
 import { aggregateTicksToCandles, type CandleData } from "@/lib/utils/candles";
 import { cn } from "@/lib/utils";
 
@@ -59,6 +63,10 @@ export default function DataAnalysisPage() {
   // Date range filter
   const [startDate, setStartDate] = useState<string>("");
   const [endDate, setEndDate] = useState<string>("");
+
+  // Validation state
+  const [validationResults, setValidationResults] = useState<Map<string, ValidationResult>>(new Map());
+  const [validating, setValidating] = useState(false);
 
   // Fetch status
   const fetchStatus = useCallback(async () => {
@@ -189,6 +197,34 @@ export default function DataAnalysisPage() {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete session");
+    }
+  };
+
+  // Validate all sessions
+  const handleValidateAll = async () => {
+    setValidating(true);
+    setError(null);
+    try {
+      const sessionIds = sessions.map((s) => s.id);
+      const res = await fetch("/api/data-recorder/sessions/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionIds }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        const resultsMap = new Map<string, ValidationResult>();
+        for (const result of data.data.results) {
+          resultsMap.set(result.sessionId, result);
+        }
+        setValidationResults(resultsMap);
+      } else {
+        setError(data.error);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to validate sessions");
+    } finally {
+      setValidating(false);
     }
   };
 
@@ -542,10 +578,25 @@ export default function DataAnalysisPage() {
 
         {/* Sessions List */}
         <div className="bg-card border rounded-lg p-6">
-          <h2 className="font-semibold mb-4 flex items-center gap-2">
-            <Clock className="w-5 h-5 text-orange-500" />
-            Recording Sessions ({sessions.length})
-          </h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold flex items-center gap-2">
+              <Clock className="w-5 h-5 text-orange-500" />
+              Recording Sessions ({sessions.length})
+            </h2>
+            <Button
+              onClick={handleValidateAll}
+              disabled={validating || sessions.length === 0}
+              variant="outline"
+              size="sm"
+            >
+              {validating ? (
+                <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <ShieldCheck className="w-4 h-4 mr-2" />
+              )}
+              Validate All
+            </Button>
+          </div>
           {sessions.length === 0 ? (
             <p className="text-muted-foreground text-center py-4">
               No recording sessions yet. Start the recorder to begin collecting data.
@@ -560,6 +611,7 @@ export default function DataAnalysisPage() {
                     <th className="pb-2 pr-4">Ticks</th>
                     <th className="pb-2 pr-4">Snapshots</th>
                     <th className="pb-2 pr-4">Status</th>
+                    <th className="pb-2 pr-4">Quality</th>
                     <th className="pb-2 w-10"></th>
                   </tr>
                 </thead>
@@ -591,6 +643,11 @@ export default function DataAnalysisPage() {
                         ) : (
                           <span className="text-green-500">Recording</span>
                         )}
+                      </td>
+                      <td className="py-2 pr-4">
+                        <ValidationStatusIndicator
+                          result={validationResults.get(session.id)}
+                        />
                       </td>
                       <td className="py-2">
                         <button
@@ -642,4 +699,118 @@ function RecorderStatusBadge({ state }: { state: string }) {
       <span className="text-sm">{text}</span>
     </div>
   );
+}
+
+// Validation Status Indicator Component
+function ValidationStatusIndicator({ result }: { result?: ValidationResult }) {
+  if (!result) {
+    return <span className="text-muted-foreground/50">-</span>;
+  }
+
+  const statusConfig = {
+    valid: {
+      icon: CheckCircle2,
+      color: "text-green-500",
+      bgColor: "bg-green-500/10",
+      label: "Valid",
+    },
+    warning: {
+      icon: AlertTriangle,
+      color: "text-yellow-500",
+      bgColor: "bg-yellow-500/10",
+      label: "Warning",
+    },
+    error: {
+      icon: XCircle,
+      color: "text-red-500",
+      bgColor: "bg-red-500/10",
+      label: "Error",
+    },
+  };
+
+  const config = statusConfig[result.status];
+  const Icon = config.icon;
+
+  // Calculate completeness percentage for display
+  const completeness = result.checks.snapshotCompleteness.value;
+
+  return (
+    <div className="relative group">
+      <div
+        className={cn(
+          "flex items-center gap-1.5 px-2 py-0.5 rounded cursor-help",
+          config.bgColor
+        )}
+      >
+        <Icon className={cn("w-3.5 h-3.5", config.color)} />
+        <span className={cn("text-xs font-medium", config.color)}>
+          {completeness.toFixed(0)}%
+        </span>
+      </div>
+
+      {/* Tooltip */}
+      <div className="absolute right-0 top-full mt-2 z-50 hidden group-hover:block">
+        <div className="bg-popover border rounded-lg shadow-lg p-3 w-72 text-xs">
+          <div className="font-semibold mb-2 flex items-center gap-2">
+            <Icon className={cn("w-4 h-4", config.color)} />
+            Data Quality: {config.label}
+          </div>
+          <div className="space-y-1.5 text-muted-foreground">
+            <div className="flex justify-between">
+              <span>Session Coverage:</span>
+              <span className={getCheckColor(result.checks.sessionCoverage.status)}>
+                {result.checks.sessionCoverage.value.toFixed(1)}%
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span>Snapshot Completeness:</span>
+              <span className={getCheckColor(result.checks.snapshotCompleteness.status)}>
+                {result.checks.snapshotCompleteness.value.toFixed(1)}%
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span>Price Sum (YES+NO):</span>
+              <span className={getCheckColor(result.checks.priceSum.status)}>
+                {result.checks.priceSum.value.toFixed(4)}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span>NO Data Coverage:</span>
+              <span className={getCheckColor(result.checks.noDataCoverage.status)}>
+                {result.checks.noDataCoverage.value.toFixed(1)}%
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span>Tick Count:</span>
+              <span className={getCheckColor(result.checks.tickCount.status)}>
+                {result.checks.tickCount.value}
+              </span>
+            </div>
+          </div>
+          {result.issues.length > 0 && (
+            <div className="mt-2 pt-2 border-t border-border">
+              <div className="font-medium text-foreground mb-1">Issues:</div>
+              <ul className="list-disc list-inside text-muted-foreground space-y-0.5">
+                {result.issues.map((issue, i) => (
+                  <li key={i}>{issue}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Helper to get color based on check status
+function getCheckColor(status: "valid" | "warning" | "error"): string {
+  switch (status) {
+    case "valid":
+      return "text-green-500";
+    case "warning":
+      return "text-yellow-500";
+    case "error":
+      return "text-red-500";
+  }
 }

@@ -45,6 +45,8 @@ export class DataRecorder {
   // Current market data for snapshots
   private yesOrderBook: OrderBook | null = null;
   private noOrderBook: OrderBook | null = null;
+  private yesAssetId: string | null = null;
+  private noAssetId: string | null = null;
   private tickCount = 0;
   private snapshotCount = 0;
 
@@ -201,6 +203,8 @@ export class DataRecorder {
     this.snapshotCount = 0;
     this.yesOrderBook = null;
     this.noOrderBook = null;
+    this.yesAssetId = market.yesAssetId;
+    this.noAssetId = market.noAssetId;
 
     this.setState('recording');
     this.emitEvent({
@@ -215,20 +219,19 @@ export class DataRecorder {
     this.ws = new PolymarketWebSocket();
     await this.ws.connect();
 
-    // Subscribe to order book updates for snapshots
-    this.ws.subscribeOrderBook([market.yesAssetId], (orderBook) => {
-      this.yesOrderBook = orderBook;
-    });
-    this.ws.subscribeOrderBook([market.noAssetId], (orderBook) => {
-      this.noOrderBook = orderBook;
+    // Subscribe to order book updates for snapshots (combined subscription for sync)
+    this.ws.subscribeOrderBook([market.yesAssetId, market.noAssetId], (orderBook) => {
+      if (orderBook.asset_id === market.yesAssetId) {
+        this.yesOrderBook = orderBook;
+      } else if (orderBook.asset_id === market.noAssetId) {
+        this.noOrderBook = orderBook;
+      }
     });
 
-    // Subscribe to trades for ticks
-    this.ws.subscribeTrades([market.yesAssetId], (trade) => {
-      this.recordTick(trade, 'YES');
-    });
-    this.ws.subscribeTrades([market.noAssetId], (trade) => {
-      this.recordTick(trade, 'NO');
+    // Subscribe to trades for ticks (combined subscription for sync)
+    this.ws.subscribeTrades([market.yesAssetId, market.noAssetId], (trade) => {
+      const outcome = trade.asset_id === market.yesAssetId ? 'YES' : 'NO';
+      this.recordTick(trade, outcome);
     });
 
     // Start snapshot timer
@@ -433,6 +436,8 @@ export class DataRecorder {
     this.snapshotCount = 0;
     this.yesOrderBook = null;
     this.noOrderBook = null;
+    this.yesAssetId = yesAssetId;
+    this.noAssetId = noAssetId;
 
     this.setState('recording');
     this.emitEvent({
@@ -447,20 +452,19 @@ export class DataRecorder {
     this.ws = new PolymarketWebSocket();
     await this.ws.connect();
 
-    // Subscribe to order book updates for snapshots
-    this.ws.subscribeOrderBook([yesAssetId], (orderBook) => {
-      this.yesOrderBook = orderBook;
-    });
-    this.ws.subscribeOrderBook([noAssetId], (orderBook) => {
-      this.noOrderBook = orderBook;
+    // Subscribe to order book updates for snapshots (combined subscription for sync)
+    this.ws.subscribeOrderBook([yesAssetId, noAssetId], (orderBook) => {
+      if (orderBook.asset_id === yesAssetId) {
+        this.yesOrderBook = orderBook;
+      } else if (orderBook.asset_id === noAssetId) {
+        this.noOrderBook = orderBook;
+      }
     });
 
-    // Subscribe to trades for ticks
-    this.ws.subscribeTrades([yesAssetId], (trade) => {
-      this.recordTick(trade, 'YES');
-    });
-    this.ws.subscribeTrades([noAssetId], (trade) => {
-      this.recordTick(trade, 'NO');
+    // Subscribe to trades for ticks (combined subscription for sync)
+    this.ws.subscribeTrades([yesAssetId, noAssetId], (trade) => {
+      const outcome = trade.asset_id === yesAssetId ? 'YES' : 'NO';
+      this.recordTick(trade, outcome);
     });
 
     // Start snapshot timer
@@ -622,6 +626,8 @@ export class DataRecorder {
     this.snapshotCount = 0;
     this.yesOrderBook = null;
     this.noOrderBook = null;
+    this.yesAssetId = null;
+    this.noAssetId = null;
   }
 
   /**

@@ -9,6 +9,8 @@ export type {
   BacktestConfig,
   BacktestResult,
   BacktestTrade,
+  BacktestPendingOrder,
+  BacktestFill,
   BalanceSnapshot,
   SessionBreakdown,
   ParameterRange,
@@ -35,6 +37,15 @@ export type {
 
 // Engine
 export { BacktestEngine, runBacktest } from './BacktestEngine';
+
+// Order Matcher (for limit order simulation)
+export {
+  checkPriceCrossing,
+  getMarketableFillPrice,
+  processTicksForFills,
+  findMarketableOrders,
+  wouldOrderFillInWindow,
+} from './BacktestOrderMatcher';
 
 // PnL Calculator
 export {

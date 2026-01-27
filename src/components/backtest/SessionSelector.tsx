@@ -112,8 +112,8 @@ export function SessionSelector({
   }
 
   return (
-    <div className="bg-card border rounded-lg">
-      <div className="p-4 border-b flex items-center justify-between">
+    <div className="bg-card border rounded-lg flex flex-col max-h-[500px]">
+      <div className="p-4 border-b flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
           <Database className="w-5 h-5 text-blue-500" />
           <div>
@@ -137,11 +137,11 @@ export function SessionSelector({
       </div>
 
       {sessions.length === 0 ? (
-        <div className="p-6 text-center text-muted-foreground">
+        <div className="p-6 text-center text-muted-foreground flex-1">
           No recording sessions found. Record some market data first.
         </div>
       ) : (
-        <div className="divide-y max-h-80 overflow-y-auto">
+        <div className="divide-y flex-1 overflow-y-auto">
           {sessions.map((session) => (
             <div
               key={session.id}

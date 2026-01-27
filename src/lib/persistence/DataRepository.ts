@@ -501,3 +501,223 @@ function calculateVolatility(sessionId: string, outcome: 'YES' | 'NO'): number {
   return Math.sqrt(variance);
 }
 
+// ============================================================================
+// Data Validation
+// ============================================================================
+
+export interface ValidationCheck {
+  name: string;
+  value: number;
+  threshold: { warn: number; error: number };
+  status: 'valid' | 'warning' | 'error';
+  description: string;
+}
+
+export interface ValidationResult {
+  sessionId: string;
+  status: 'valid' | 'warning' | 'error';
+  checks: {
+    snapshotCompleteness: ValidationCheck;
+    priceSum: ValidationCheck;
+    noDataCoverage: ValidationCheck;
+    tickCount: ValidationCheck;
+    sessionCoverage: ValidationCheck;
+  };
+  issues: string[];
+}
+
+/**
+ * Validate data quality for a recording session
+ */
+export function validateSession(sessionId: string): ValidationResult | null {
+  const db = getDatabase();
+
+  // Check if session exists
+  const session = getRecordingSessionById(sessionId);
+  if (!session) return null;
+
+  const issues: string[] = [];
+
+  // Get snapshot counts for completeness check
+  const snapshotStats = db.prepare(`
+    SELECT
+      COUNT(*) as total,
+      SUM(CASE WHEN yes_best_bid IS NOT NULL AND yes_best_ask IS NOT NULL
+                AND no_best_bid IS NOT NULL AND no_best_ask IS NOT NULL
+               THEN 1 ELSE 0 END) as complete,
+      SUM(CASE WHEN no_best_bid IS NOT NULL AND no_best_ask IS NOT NULL
+               THEN 1 ELSE 0 END) as with_no_data
+    FROM market_snapshots
+    WHERE session_id = ?
+  `).get(sessionId) as { total: number; complete: number; with_no_data: number };
+
+  // Get price sum average (yesMid + noMid should ≈ 1.0)
+  const priceSumStats = db.prepare(`
+    SELECT
+      AVG(
+        (CAST(yes_best_bid AS REAL) + CAST(yes_best_ask AS REAL)) / 2 +
+        (CAST(no_best_bid AS REAL) + CAST(no_best_ask AS REAL)) / 2
+      ) as avg_sum
+    FROM market_snapshots
+    WHERE session_id = ?
+      AND yes_best_bid IS NOT NULL AND yes_best_ask IS NOT NULL
+      AND no_best_bid IS NOT NULL AND no_best_ask IS NOT NULL
+  `).get(sessionId) as { avg_sum: number | null };
+
+  // Get tick count
+  const tickStats = db.prepare(`
+    SELECT COUNT(*) as count FROM market_ticks WHERE session_id = ?
+  `).get(sessionId) as { count: number };
+
+  // Get actual recording time range from snapshots
+  const timeRangeStats = db.prepare(`
+    SELECT
+      MIN(timestamp) as first_snapshot,
+      MAX(timestamp) as last_snapshot
+    FROM market_snapshots
+    WHERE session_id = ?
+  `).get(sessionId) as { first_snapshot: string | null; last_snapshot: string | null };
+
+  // Calculate session coverage (actual recording time vs expected session duration)
+  const expectedDurationMs = new Date(session.end_time).getTime() - new Date(session.start_time).getTime();
+  let actualDurationMs = 0;
+  if (timeRangeStats.first_snapshot && timeRangeStats.last_snapshot) {
+    actualDurationMs = new Date(timeRangeStats.last_snapshot).getTime() - new Date(timeRangeStats.first_snapshot).getTime();
+  }
+  const sessionCoveragePercent = expectedDurationMs > 0
+    ? (actualDurationMs / expectedDurationMs) * 100
+    : 0;
+
+  // Calculate completeness percentage
+  const completenessPercent = snapshotStats.total > 0
+    ? (snapshotStats.complete / snapshotStats.total) * 100
+    : 0;
+
+  // Calculate NO data coverage percentage
+  const noDataPercent = snapshotStats.total > 0
+    ? (snapshotStats.with_no_data / snapshotStats.total) * 100
+    : 0;
+
+  // Calculate price sum deviation from 1.0
+  const priceSumDeviation = priceSumStats.avg_sum !== null
+    ? Math.abs(priceSumStats.avg_sum - 1.0)
+    : 1.0; // If no valid data, treat as maximum deviation
+
+  // Build checks
+  const snapshotCompleteness: ValidationCheck = {
+    name: 'Snapshot Completeness',
+    value: completenessPercent,
+    threshold: { warn: 50, error: 20 },
+    status: getStatus(completenessPercent, 50, 20, 'below'),
+    description: `${completenessPercent.toFixed(1)}% of snapshots have all 4 bid/ask values`,
+  };
+  if (snapshotCompleteness.status !== 'valid') {
+    issues.push(`Low snapshot completeness: ${completenessPercent.toFixed(1)}% (${snapshotStats.complete}/${snapshotStats.total})`);
+  }
+
+  const priceSum: ValidationCheck = {
+    name: 'Price Sum (YES+NO)',
+    value: priceSumStats.avg_sum ?? 0,
+    threshold: { warn: 0.05, error: 0.10 },
+    status: getStatus(priceSumDeviation, 0.05, 0.10, 'above'),
+    description: priceSumStats.avg_sum !== null
+      ? `Average YES+NO mid = ${priceSumStats.avg_sum.toFixed(4)} (should be ≈1.0)`
+      : 'No valid price data available',
+  };
+  if (priceSum.status !== 'valid') {
+    issues.push(`Price sum deviation: ${priceSumDeviation.toFixed(4)} from 1.0`);
+  }
+
+  const noDataCoverage: ValidationCheck = {
+    name: 'NO Data Coverage',
+    value: noDataPercent,
+    threshold: { warn: 50, error: 20 },
+    status: getStatus(noDataPercent, 50, 20, 'below'),
+    description: `${noDataPercent.toFixed(1)}% of snapshots have valid NO bid/ask`,
+  };
+  if (noDataCoverage.status !== 'valid') {
+    issues.push(`Low NO data coverage: ${noDataPercent.toFixed(1)}%`);
+  }
+
+  const tickCount: ValidationCheck = {
+    name: 'Tick Count',
+    value: tickStats.count,
+    threshold: { warn: 100, error: 50 },
+    status: getStatus(tickStats.count, 100, 50, 'below'),
+    description: `${tickStats.count} ticks recorded`,
+  };
+  if (tickCount.status !== 'valid') {
+    issues.push(`Low tick count: ${tickStats.count}`);
+  }
+
+  const sessionCoverage: ValidationCheck = {
+    name: 'Session Coverage',
+    value: sessionCoveragePercent,
+    threshold: { warn: 80, error: 50 },
+    status: getStatus(sessionCoveragePercent, 80, 50, 'below'),
+    description: `${sessionCoveragePercent.toFixed(1)}% of session duration recorded (${Math.round(actualDurationMs / 1000)}s / ${Math.round(expectedDurationMs / 1000)}s)`,
+  };
+  if (sessionCoverage.status !== 'valid') {
+    issues.push(`Incomplete session: only ${sessionCoveragePercent.toFixed(1)}% recorded`);
+  }
+
+  // Determine overall status
+  const allStatuses = [
+    snapshotCompleteness.status,
+    priceSum.status,
+    noDataCoverage.status,
+    tickCount.status,
+    sessionCoverage.status,
+  ];
+  let overallStatus: 'valid' | 'warning' | 'error' = 'valid';
+  if (allStatuses.includes('error')) {
+    overallStatus = 'error';
+  } else if (allStatuses.includes('warning')) {
+    overallStatus = 'warning';
+  }
+
+  return {
+    sessionId,
+    status: overallStatus,
+    checks: {
+      snapshotCompleteness,
+      priceSum,
+      noDataCoverage,
+      tickCount,
+      sessionCoverage,
+    },
+    issues,
+  };
+}
+
+/**
+ * Validate multiple sessions
+ */
+export function validateSessions(sessionIds: string[]): ValidationResult[] {
+  return sessionIds
+    .map((id) => validateSession(id))
+    .filter((result): result is ValidationResult => result !== null);
+}
+
+/**
+ * Helper to determine status based on thresholds
+ */
+function getStatus(
+  value: number,
+  warnThreshold: number,
+  errorThreshold: number,
+  direction: 'above' | 'below'
+): 'valid' | 'warning' | 'error' {
+  if (direction === 'below') {
+    // Value should be above thresholds (higher is better)
+    if (value < errorThreshold) return 'error';
+    if (value < warnThreshold) return 'warning';
+    return 'valid';
+  } else {
+    // Value should be below thresholds (lower is better)
+    if (value > errorThreshold) return 'error';
+    if (value > warnThreshold) return 'warning';
+    return 'valid';
+  }
+}
+

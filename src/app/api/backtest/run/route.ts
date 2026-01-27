@@ -15,6 +15,8 @@ interface RunBacktestRequest {
   strategyParams?: Record<string, unknown>;
   initialCapital?: number;
   saveResult?: boolean;
+  /** Execution mode: 'limit' (default) simulates limit orders, 'immediate' uses taker execution */
+  executionMode?: 'immediate' | 'limit';
 }
 
 export async function POST(request: Request) {
@@ -29,12 +31,13 @@ export async function POST(request: Request) {
       );
     }
 
-    // Build config
+    // Build config (executionMode defaults to 'limit' in BacktestEngine)
     const config: BacktestConfig = {
       sessionIds: body.sessionIds,
       strategySlug: body.strategySlug || 'time-above-50',
       strategyParams: { ...DEFAULT_CONFIG, ...(body.strategyParams || {}) },
       initialCapital: body.initialCapital || 1000,
+      executionMode: body.executionMode, // defaults to 'limit' if not specified
     };
 
     // Run backtest
@@ -82,6 +85,12 @@ export async function POST(request: Request) {
         backtestDurationSeconds: result.backtestDurationSeconds,
         ticksProcessed: result.ticksProcessed,
         sessionBreakdown: result.sessionBreakdown,
+        // Execution mode and limit order metrics
+        executionMode: result.executionMode,
+        totalOrdersCreated: result.totalOrdersCreated,
+        filledOrderCount: result.filledOrderCount,
+        expiredOrderCount: result.expiredOrderCount,
+        fillRate: result.fillRate,
         // Include trades and balance history for visualization
         trades: result.trades,
         balanceHistory: result.balanceHistory,

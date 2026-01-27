@@ -24,6 +24,18 @@ export interface BacktestConfig {
   initialCapital: number;
   /** Optional: End time to cut off backtest (ISO string) */
   endTimeOverride?: string;
+  /** Enable verbose logging for debugging (default: false) */
+  verbose?: boolean;
+  /** Enable trade validation to catch invalid trades (default: false) */
+  validateTrades?: boolean;
+  /** Slippage model: 'none' = no slippage, 'spread' = use bid/ask spread, 'spread_plus_impact' = spread + market impact */
+  slippageModel?: 'none' | 'spread' | 'spread_plus_impact';
+  /** Additional slippage in basis points (only used with spread_plus_impact model) */
+  slippageBps?: number;
+  /** Execution mode: 'immediate' = taker execution at bid/ask, 'limit' = limit order simulation (default: 'limit') */
+  executionMode?: 'immediate' | 'limit';
+  /** Whether marketable orders (crossing spread) fill immediately (default: true) */
+  fillMarketableImmediately?: boolean;
 }
 
 /**
@@ -70,6 +82,46 @@ export type OptimizationMetric =
 // ============================================================================
 // Result Types
 // ============================================================================
+
+/**
+ * A pending limit order during backtest simulation
+ */
+export interface BacktestPendingOrder {
+  /** Unique order ID */
+  id: string;
+  /** BUY or SELL */
+  side: 'BUY' | 'SELL';
+  /** YES or NO outcome */
+  outcome: 'YES' | 'NO';
+  /** Limit price */
+  price: number;
+  /** Total quantity requested */
+  quantity: number;
+  /** Quantity already filled */
+  filledQuantity: number;
+  /** Timestamp when order was created (Unix ms) */
+  createdAt: number;
+  /** Session ID this order was created in */
+  sessionId: string;
+  /** Reason for creating this order */
+  reason: string;
+}
+
+/**
+ * Result of a limit order fill during backtest
+ */
+export interface BacktestFill {
+  /** Order ID that was filled */
+  orderId: string;
+  /** Price at which fill occurred */
+  fillPrice: number;
+  /** Quantity filled in this event */
+  fillQuantity: number;
+  /** Timestamp of fill (Unix ms) */
+  timestamp: number;
+  /** Whether order is now fully filled */
+  isFullyFilled: boolean;
+}
 
 /**
  * A single simulated trade during backtest
@@ -169,6 +221,16 @@ export interface BacktestResult {
   backtestDurationSeconds: number;
   /** Number of ticks processed */
   ticksProcessed: number;
+  /** Execution mode used ('immediate' or 'limit') */
+  executionMode?: 'immediate' | 'limit';
+  /** Number of orders that expired unfilled (limit mode only) */
+  expiredOrderCount?: number;
+  /** Number of orders that were filled (limit mode only) */
+  filledOrderCount?: number;
+  /** Fill rate: filledOrderCount / (filledOrderCount + expiredOrderCount) (limit mode only) */
+  fillRate?: number;
+  /** Total orders created (limit mode only) */
+  totalOrdersCreated?: number;
 }
 
 /**

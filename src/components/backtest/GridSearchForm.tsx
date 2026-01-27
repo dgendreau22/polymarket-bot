@@ -205,8 +205,8 @@ export function GridSearchForm({
   };
 
   return (
-    <div className="bg-card border rounded-lg">
-      <div className="p-4 border-b flex items-center justify-between">
+    <div className="bg-card border rounded-lg flex flex-col max-h-[500px]">
+      <div className="p-4 border-b flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
           <Settings2 className="w-5 h-5 text-purple-500" />
           <div>
@@ -308,7 +308,7 @@ export function GridSearchForm({
       )}
 
       {/* Parameter Groups */}
-      <div className="p-4 space-y-6">
+      <div className="p-4 space-y-6 flex-1 overflow-y-auto">
         {Object.entries(PARAMETER_GROUPS).map(([key, group]) => (
           <div key={key}>
             <h4 className="text-sm font-medium text-muted-foreground mb-3">
