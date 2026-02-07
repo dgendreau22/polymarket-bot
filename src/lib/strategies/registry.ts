@@ -12,12 +12,14 @@ import { TestOscillatorExecutor } from './test-oscillator-executor';
 import { MarketMakerExecutor } from './market-maker-executor';
 import { ArbitrageExecutor } from './arbitrage-executor';
 import { TimeAbove50Executor } from './time-above-50-executor';
+import { SmileArbIVExecutor } from './smile-arb-iv-executor';
 
 // Re-export executor classes for external use
 export { TestOscillatorExecutor } from './test-oscillator-executor';
 export { MarketMakerExecutor } from './market-maker-executor';
 export { ArbitrageExecutor } from './arbitrage-executor';
 export { TimeAbove50Executor } from './time-above-50-executor';
+export { SmileArbIVExecutor } from './smile-arb-iv-executor';
 
 // Registry of strategy executors
 const executors: Map<string, IStrategyExecutor> = new Map();
@@ -86,6 +88,7 @@ export function cleanupBotState(botId: string): void {
 // Use globalThis to persist executors across hot-reloads (preserves state like dbar, tau)
 const globalExecutors = globalThis as unknown as {
   _timeAbove50Executor?: TimeAbove50Executor;
+  _smileArbIVExecutor?: SmileArbIVExecutor;
 };
 
 // Get or create TimeAbove50 executor (persisted across hot-reloads)
@@ -96,8 +99,17 @@ function getTimeAbove50Executor(): TimeAbove50Executor {
   return globalExecutors._timeAbove50Executor;
 }
 
+// Get or create SmileArbIV executor (persisted across hot-reloads)
+function getSmileArbIVExecutor(): SmileArbIVExecutor {
+  if (!globalExecutors._smileArbIVExecutor) {
+    globalExecutors._smileArbIVExecutor = new SmileArbIVExecutor();
+  }
+  return globalExecutors._smileArbIVExecutor;
+}
+
 // Register built-in executors
 registerStrategy('test-oscillator', new TestOscillatorExecutor());
 registerStrategy('market-maker', new MarketMakerExecutor());
 registerStrategy('arbitrage', new ArbitrageExecutor());
 registerStrategy('time-above-50', getTimeAbove50Executor());
+registerStrategy('smile-arb-iv', getSmileArbIVExecutor());
