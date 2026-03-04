@@ -307,6 +307,14 @@ export function initializeSchema(db: Database.Database): void {
       ON strategy_presets(final_sharpe DESC);
   `);
 
+  // Migration: Add duration_type column to recording_sessions
+  try {
+    db.exec(`ALTER TABLE recording_sessions ADD COLUMN duration_type TEXT NOT NULL DEFAULT '15m' CHECK(duration_type IN ('5m', '15m'))`);
+    console.log('[Schema] Added duration_type column to recording_sessions');
+  } catch {
+    // Column already exists, ignore
+  }
+
   // Migration: Add market_name column to bots table if it doesn't exist
   try {
     db.exec(`ALTER TABLE bots ADD COLUMN market_name TEXT`);

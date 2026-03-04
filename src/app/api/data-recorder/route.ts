@@ -18,10 +18,13 @@ export async function GET() {
   });
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
+    const body = await request.json().catch(() => ({}));
+    const durationType = body.durationType === '5m' ? '5m' : '15m';
+
     const recorder = getDataRecorder();
-    await recorder.start();
+    await recorder.start(durationType);
 
     return NextResponse.json({
       success: true,

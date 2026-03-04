@@ -8,6 +8,11 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getOrchestrator } from '@/lib/bots/Orchestrator';
+import { DURATION_CONFIGS } from '@/lib/bots/duration-config';
+import type { MarketDuration } from '@/lib/bots/duration-config';
+import { getRegisteredStrategies } from '@/lib/strategies/registry';
+
+const VALID_DURATIONS = Object.keys(DURATION_CONFIGS) as MarketDuration[];
 
 export async function GET() {
   const orchestrator = getOrchestrator();
@@ -24,7 +29,7 @@ export async function POST(request: NextRequest) {
     const orchestrator = getOrchestrator();
 
     // Validate strategy
-    const validStrategies = ['arbitrage', 'market-maker', 'test-oscillator', 'time-above-50'];
+    const validStrategies = getRegisteredStrategies();
     if (body.strategy && !validStrategies.includes(body.strategy)) {
       return NextResponse.json(
         { success: false, error: `Invalid strategy. Valid options: ${validStrategies.join(', ')}` },
@@ -40,11 +45,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate lead time
-    const leadTime = body.leadTimeMinutes || 5;
-    if (leadTime < 1 || leadTime > 15) {
+    // Validate market duration
+    const marketDuration: MarketDuration = body.marketDuration || '15m';
+    if (!VALID_DURATIONS.includes(marketDuration)) {
       return NextResponse.json(
-        { success: false, error: 'Lead time must be between 1 and 15 minutes' },
+        { success: false, error: `Invalid market duration. Valid options: ${VALID_DURATIONS.join(', ')}` },
+        { status: 400 }
+      );
+    }
+
+    // Validate lead time (max depends on duration)
+    const durationConfig = DURATION_CONFIGS[marketDuration];
+    const leadTime = body.leadTimeMinutes || 5;
+    if (leadTime < 1 || leadTime > durationConfig.maxLeadTimeMinutes) {
+      return NextResponse.json(
+        { success: false, error: `Lead time must be between 1 and ${durationConfig.maxLeadTimeMinutes} minutes for ${durationConfig.displayName} markets` },
         { status: 400 }
       );
     }
@@ -55,6 +70,7 @@ export async function POST(request: NextRequest) {
       leadTimeMinutes: leadTime,
       strategyConfig: body.strategyConfig,
       recordData: body.recordData !== false,  // Default true if not specified
+      marketDuration,
     });
 
     return NextResponse.json({

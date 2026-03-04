@@ -27,6 +27,7 @@ export interface RecordingSessionRow {
   snapshot_count: number;
   created_at: string;
   ended_at: string | null;
+  duration_type: '5m' | '15m';
 }
 
 export interface MarketTickRow {
@@ -82,14 +83,16 @@ export function createRecordingSession(session: {
   noAssetId: string;
   startTime: string;
   endTime: string;
+  durationType?: '5m' | '15m';
 }): RecordingSessionRow {
   const db = getDatabase();
   const id = uuidv4();
   const now = new Date().toISOString();
+  const durationType = session.durationType ?? '15m';
 
   db.prepare(`
-    INSERT INTO recording_sessions (id, market_id, market_name, event_slug, yes_asset_id, no_asset_id, start_time, end_time, tick_count, snapshot_count, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
+    INSERT INTO recording_sessions (id, market_id, market_name, event_slug, yes_asset_id, no_asset_id, start_time, end_time, tick_count, snapshot_count, created_at, duration_type)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
   `).run(
     id,
     session.marketId,
@@ -99,7 +102,8 @@ export function createRecordingSession(session: {
     session.noAssetId,
     session.startTime,
     session.endTime,
-    now
+    now,
+    durationType
   );
 
   return getRecordingSessionById(id)!;
@@ -116,8 +120,16 @@ export function getRecordingSessionById(id: string): RecordingSessionRow | null 
 /**
  * Get all recording sessions
  */
-export function getAllRecordingSessions(limit?: number): RecordingSessionRow[] {
+export function getAllRecordingSessions(limit?: number, durationType?: '5m' | '15m'): RecordingSessionRow[] {
   const db = getDatabase();
+  if (durationType) {
+    if (limit) {
+      return db.prepare('SELECT * FROM recording_sessions WHERE duration_type = ? ORDER BY created_at DESC LIMIT ?')
+        .all(durationType, limit) as RecordingSessionRow[];
+    }
+    return db.prepare('SELECT * FROM recording_sessions WHERE duration_type = ? ORDER BY created_at DESC')
+      .all(durationType) as RecordingSessionRow[];
+  }
   if (limit) {
     return db.prepare('SELECT * FROM recording_sessions ORDER BY created_at DESC LIMIT ?')
       .all(limit) as RecordingSessionRow[];

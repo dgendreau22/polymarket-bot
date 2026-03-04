@@ -28,10 +28,12 @@ import type {
   OrchestratorStatus,
   OrchestratorEvent,
 } from "@/lib/bots/Orchestrator";
+import type { MarketDuration } from "@/lib/bots/duration-config";
+import { DURATION_CONFIGS } from "@/lib/bots/duration-config";
 import type { StrategyPreset } from "@/lib/persistence/StrategyPresetsRepository";
 
-// Pattern to match Bitcoin 15-minute markets
-const BTC_15M_PATTERN = /Bitcoin Up or Down/i;
+// Pattern to match Bitcoin up/down markets (works for all durations)
+const BTC_MARKET_PATTERN = /Bitcoin Up or Down/i;
 
 export default function OrchestratorPage() {
   // State
@@ -51,6 +53,7 @@ export default function OrchestratorPage() {
   const [leadTimeMinutes, setLeadTimeMinutes] = useState(5);
   const [strategyConfig, setStrategyConfig] = useState<Record<string, unknown>>({});
   const [recordData, setRecordData] = useState(true);
+  const [marketDuration, setMarketDuration] = useState<MarketDuration>("15m");
 
   // Preset state
   const [presets, setPresets] = useState<StrategyPreset[]>([]);
@@ -74,6 +77,9 @@ export default function OrchestratorPage() {
           if (data.data.config.recordData !== undefined) {
             setRecordData(data.data.config.recordData);
           }
+          if (data.data.config.marketDuration) {
+            setMarketDuration(data.data.config.marketDuration);
+          }
         }
       } else {
         setError(data.error);
@@ -89,11 +95,11 @@ export default function OrchestratorPage() {
       const res = await fetch("/api/bots");
       const data = await res.json();
       if (data.success) {
-        // Filter to only Bitcoin 15m market bots
-        const btc15mBots = data.data.filter((bot: BotInstance) =>
-          BTC_15M_PATTERN.test(bot.config.marketName || "")
+        // Filter to only Bitcoin up/down market bots
+        const btcBots = data.data.filter((bot: BotInstance) =>
+          BTC_MARKET_PATTERN.test(bot.config.marketName || "")
         );
-        setBots(btc15mBots);
+        setBots(btcBots);
       }
     } catch (err) {
       console.error("Failed to fetch bots:", err);
@@ -127,6 +133,7 @@ export default function OrchestratorPage() {
           leadTimeMinutes,
           strategyConfig,
           recordData,
+          marketDuration,
         }),
       });
       const data = await res.json();
@@ -388,7 +395,7 @@ export default function OrchestratorPage() {
                 Dashboard
               </Link>
               <div>
-                <h1 className="text-xl font-bold">BTC 15-min Orchestrator</h1>
+                <h1 className="text-xl font-bold">BTC {DURATION_CONFIGS[marketDuration].displayName} Orchestrator</h1>
                 <p className="text-sm text-muted-foreground">
                   Automated trading for Bitcoin prediction markets
                 </p>
@@ -453,6 +460,33 @@ export default function OrchestratorPage() {
               </select>
             </div>
 
+            {/* Market Duration */}
+            <div>
+              <label className="text-sm text-muted-foreground block mb-1">
+                Market Duration
+              </label>
+              <select
+                value={marketDuration}
+                onChange={(e) => {
+                  const dur = e.target.value as MarketDuration;
+                  setMarketDuration(dur);
+                  // Clamp lead time to new max
+                  const maxLead = DURATION_CONFIGS[dur].maxLeadTimeMinutes;
+                  if (leadTimeMinutes > maxLead) {
+                    setLeadTimeMinutes(maxLead);
+                  }
+                }}
+                className="w-full p-2 border rounded bg-background text-foreground"
+                disabled={isRunning}
+              >
+                {(Object.keys(DURATION_CONFIGS) as MarketDuration[]).map((dur) => (
+                  <option key={dur} value={dur}>
+                    {DURATION_CONFIGS[dur].displayName}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* Lead Time */}
             <div>
               <label className="text-sm text-muted-foreground block mb-1">
@@ -463,13 +497,13 @@ export default function OrchestratorPage() {
                 value={leadTimeMinutes}
                 onChange={(e) =>
                   setLeadTimeMinutes(
-                    Math.max(1, Math.min(15, parseInt(e.target.value) || 5))
+                    Math.max(1, Math.min(DURATION_CONFIGS[marketDuration].maxLeadTimeMinutes, parseInt(e.target.value) || 5))
                   )
                 }
                 className="w-full p-2 border rounded bg-background text-foreground"
                 disabled={isRunning}
                 min={1}
-                max={15}
+                max={DURATION_CONFIGS[marketDuration].maxLeadTimeMinutes}
               />
             </div>
 
@@ -688,7 +722,7 @@ export default function OrchestratorPage() {
               <div>
                 <p className="font-medium">Searching for next market...</p>
                 <p className="text-sm text-muted-foreground">
-                  Looking for upcoming Bitcoin 15-minute prediction markets
+                  Looking for upcoming Bitcoin {DURATION_CONFIGS[marketDuration].displayName} prediction markets
                 </p>
               </div>
             </div>
@@ -716,7 +750,7 @@ export default function OrchestratorPage() {
                 <div>
                   <h2 className="font-semibold flex items-center gap-2">
                     <Bot className="w-5 h-5 text-purple-500" />
-                    Bitcoin 15m Bots
+                    Bitcoin {DURATION_CONFIGS[marketDuration].displayName} Bots
                   </h2>
                   <p className="text-sm text-muted-foreground">
                     {bots.filter((b) => b.state === "running").length} running,{" "}
@@ -760,7 +794,7 @@ export default function OrchestratorPage() {
             <BotList
               bots={bots}
               onStateChange={fetchBots}
-              emptyMessage="No Bitcoin 15m bots yet. Start the orchestrator to create bots automatically."
+              emptyMessage={`No Bitcoin ${DURATION_CONFIGS[marketDuration].displayName} bots yet. Start the orchestrator to create bots automatically.`}
             />
           </div>
         </div>

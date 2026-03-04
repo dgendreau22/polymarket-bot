@@ -27,6 +27,8 @@ import { cn } from "@/lib/utils";
 
 // Available timeframes for chart
 const TIMEFRAMES = [
+  { value: 1, label: "1s" },
+  { value: 5, label: "5s" },
   { value: 15, label: "15s" },
   { value: 30, label: "30s" },
   { value: 60, label: "1m" },
@@ -63,6 +65,12 @@ export default function DataAnalysisPage() {
   // Date range filter
   const [startDate, setStartDate] = useState<string>("");
   const [endDate, setEndDate] = useState<string>("");
+
+  // Duration selector
+  const [durationType, setDurationType] = useState<'5m' | '15m'>('15m');
+
+  // Session list filter
+  const [sessionFilter, setSessionFilter] = useState<'all' | '5m' | '15m'>('all');
 
   // Validation state
   const [validationResults, setValidationResults] = useState<Map<string, ValidationResult>>(new Map());
@@ -140,7 +148,11 @@ export default function DataAnalysisPage() {
     setActionLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/data-recorder", { method: "POST" });
+      const res = await fetch("/api/data-recorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ durationType }),
+      });
       const data = await res.json();
       if (data.success) {
         setStatus(data.data);
@@ -324,6 +336,12 @@ export default function DataAnalysisPage() {
   // Count of filtered ticks for display
   const filteredTickCount = filteredTicks.length;
 
+  // Filter sessions by duration type
+  const filteredSessions = useMemo(() => {
+    if (sessionFilter === 'all') return sessions;
+    return sessions.filter((s) => s.duration_type === sessionFilter);
+  }, [sessions, sessionFilter]);
+
   const isRecording = status?.state === "recording";
   const isDiscovering = status?.state === "discovering";
   const state = status?.state ?? "idle";
@@ -345,12 +363,31 @@ export default function DataAnalysisPage() {
               <div>
                 <h1 className="text-xl font-bold">Market Data Recorder</h1>
                 <p className="text-sm text-muted-foreground">
-                  Record Bitcoin 15-min market data for analysis
+                  Record Bitcoin market data for analysis
                 </p>
               </div>
             </div>
             <div className="flex items-center gap-4">
               <RecorderStatusBadge state={state} />
+              {/* Duration Selector */}
+              <div className="flex items-center gap-1">
+                {(['5m', '15m'] as const).map((d) => (
+                  <button
+                    key={d}
+                    onClick={() => setDurationType(d)}
+                    disabled={isRecording || isDiscovering}
+                    className={cn(
+                      "px-3 py-1 rounded text-sm font-medium transition-colors",
+                      durationType === d
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted hover:bg-muted/80",
+                      (isRecording || isDiscovering) && "opacity-50 cursor-not-allowed"
+                    )}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
               {!isRecording && !isDiscovering ? (
                 <Button
                   onClick={handleStart}
@@ -439,7 +476,7 @@ export default function DataAnalysisPage() {
               <div>
                 <p className="font-medium">Searching for next market...</p>
                 <p className="text-sm text-muted-foreground">
-                  Looking for upcoming Bitcoin 15-minute prediction markets
+                  Looking for upcoming Bitcoin prediction markets
                 </p>
               </div>
             </div>
@@ -581,25 +618,46 @@ export default function DataAnalysisPage() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-semibold flex items-center gap-2">
               <Clock className="w-5 h-5 text-orange-500" />
-              Recording Sessions ({sessions.length})
+              Recording Sessions ({filteredSessions.length})
             </h2>
-            <Button
-              onClick={handleValidateAll}
-              disabled={validating || sessions.length === 0}
-              variant="outline"
-              size="sm"
-            >
-              {validating ? (
-                <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <ShieldCheck className="w-4 h-4 mr-2" />
-              )}
-              Validate All
-            </Button>
+            <div className="flex items-center gap-3">
+              {/* Duration Filter */}
+              <div className="flex items-center gap-1">
+                {(['all', '5m', '15m'] as const).map((f) => (
+                  <button
+                    key={f}
+                    onClick={() => setSessionFilter(f)}
+                    className={cn(
+                      "px-3 py-1 rounded text-sm font-medium transition-colors",
+                      sessionFilter === f
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted hover:bg-muted/80"
+                    )}
+                  >
+                    {f === 'all' ? 'All' : f}
+                  </button>
+                ))}
+              </div>
+              <Button
+                onClick={handleValidateAll}
+                disabled={validating || sessions.length === 0}
+                variant="outline"
+                size="sm"
+              >
+                {validating ? (
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <ShieldCheck className="w-4 h-4 mr-2" />
+                )}
+                Validate All
+              </Button>
+            </div>
           </div>
-          {sessions.length === 0 ? (
+          {filteredSessions.length === 0 ? (
             <p className="text-muted-foreground text-center py-4">
-              No recording sessions yet. Start the recorder to begin collecting data.
+              {sessions.length === 0
+                ? "No recording sessions yet. Start the recorder to begin collecting data."
+                : "No sessions match the selected filter."}
             </p>
           ) : (
             <div className="overflow-x-auto">
@@ -607,6 +665,7 @@ export default function DataAnalysisPage() {
                 <thead>
                   <tr className="border-b text-left text-muted-foreground">
                     <th className="pb-2 pr-4">Market</th>
+                    <th className="pb-2 pr-4">Duration</th>
                     <th className="pb-2 pr-4">Start Time</th>
                     <th className="pb-2 pr-4">Ticks</th>
                     <th className="pb-2 pr-4">Snapshots</th>
@@ -616,7 +675,7 @@ export default function DataAnalysisPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sessions.map((session) => (
+                  {filteredSessions.map((session) => (
                     <tr
                       key={session.id}
                       className={cn(
@@ -630,6 +689,16 @@ export default function DataAnalysisPage() {
                       <td className="py-2 pr-4">
                         <span className="font-medium">
                           {session.market_name.replace("Bitcoin Up or Down - ", "")}
+                        </span>
+                      </td>
+                      <td className="py-2 pr-4">
+                        <span className={cn(
+                          "px-1.5 py-0.5 rounded text-xs font-medium",
+                          session.duration_type === '5m'
+                            ? "bg-blue-500/20 text-blue-400"
+                            : "bg-purple-500/20 text-purple-400"
+                        )}>
+                          {session.duration_type || '15m'}
                         </span>
                       </td>
                       <td className="py-2 pr-4 font-mono text-muted-foreground">

@@ -26,8 +26,8 @@ import type {
   RecorderEventHandler,
   CurrentSession,
 } from './types';
+import { DURATION_CONFIGS, type MarketDuration } from '@/lib/bots/duration-config';
 
-const BITCOIN_15MIN_SLUG_PREFIX = 'will-bitcoin-go-up-or-down-in-the-next-15-minutes';
 const SNAPSHOT_INTERVAL_MS = 2000; // 2 seconds (high-resolution for accurate backtesting)
 const MARKET_DISCOVERY_INTERVAL_MS = 30000; // 30 seconds
 
@@ -35,6 +35,7 @@ export class DataRecorder {
   private state: RecorderState = 'idle';
   private currentSession: CurrentSession | null = null;
   private error: string | null = null;
+  private durationType: '5m' | '15m' = '15m';
 
   private ws: PolymarketWebSocket | null = null;
   private discoveryTimer: ReturnType<typeof setInterval> | null = null;
@@ -58,6 +59,7 @@ export class DataRecorder {
       state: this.state,
       currentSession: this.currentSession ?? undefined,
       error: this.error ?? undefined,
+      durationType: this.durationType,
     };
   }
 
@@ -78,11 +80,12 @@ export class DataRecorder {
   /**
    * Start the recorder
    */
-  async start(): Promise<void> {
+  async start(durationType?: '5m' | '15m'): Promise<void> {
     if (this.state === 'recording' || this.state === 'discovering') {
       return;
     }
 
+    this.durationType = durationType ?? '15m';
     this.setState('discovering');
     this.error = null;
 
@@ -142,7 +145,8 @@ export class DataRecorder {
     // If this was the current session, clean up
     if (this.currentSession) {
       // Check if current session matches this event slug by comparing timestamps
-      const currentEventSlug = `btc-updown-15m-${Math.floor(new Date(this.currentSession.startTime).getTime() / 1000)}`;
+      const config = DURATION_CONFIGS[this.durationType];
+      const currentEventSlug = `btc-updown-${config.suffix}-${Math.floor(new Date(this.currentSession.startTime).getTime() / 1000)}`;
       if (currentEventSlug === eventSlug) {
         this.endSession();
         this.setState('idle');
@@ -163,7 +167,8 @@ export class DataRecorder {
       noAssetId: string;
     },
     startTime: Date,
-    endTime: Date
+    endTime: Date,
+    durationType?: '5m' | '15m'
   ): Promise<void> {
     // Check if already recording this market
     if (this.state === 'recording' && this.currentSession?.marketId === market.marketId) {
@@ -187,6 +192,7 @@ export class DataRecorder {
       noAssetId: market.noAssetId,
       startTime: startTime.toISOString(),  // Use market start, not now()
       endTime: endTime.toISOString(),
+      durationType: durationType ?? this.durationType,
     });
 
     this.currentSession = {
@@ -269,7 +275,7 @@ export class DataRecorder {
   }
 
   /**
-   * Find the next upcoming Bitcoin 15-minute market
+   * Find the next upcoming Bitcoin market for the configured duration
    * Uses the same timestamp-based slug lookup as the Orchestrator
    */
   private async findUpcomingMarket(): Promise<Market | null> {
@@ -277,15 +283,18 @@ export class DataRecorder {
     const now = new Date();
     const nowMs = now.getTime();
     const MIN_REMAINING_MS = 2 * 60 * 1000; // Need at least 2 minutes remaining
+    const config = DURATION_CONFIGS[this.durationType];
+    const intervalMinutes = config.intervalMinutes;
+    const slugSuffix = config.suffix;
 
-    console.log(`[DataRecorder] Searching for markets at ${now.toLocaleString()} (UTC: ${now.toISOString()})`);
+    console.log(`[DataRecorder] Searching for ${config.displayName} markets at ${now.toLocaleString()} (UTC: ${now.toISOString()})`);
 
-    // Calculate the next few 15-minute slot timestamps
-    const slotTimestamps = this.getUpcoming15MinSlots(now, 8); // Check next 8 slots (2 hours)
+    // Calculate the next few slot timestamps
+    const slotTimestamps = this.getUpcomingSlots(now, config.lookAheadSlots);
 
     for (const slotInfo of slotTimestamps) {
       const { timestamp, startTimeET, endTimeET } = slotInfo;
-      const eventSlug = `btc-updown-15m-${timestamp}`;
+      const eventSlug = `btc-updown-${slugSuffix}-${timestamp}`;
 
       // Check if we're already recording this market
       if (this.currentSession?.marketId === eventSlug) {
@@ -301,7 +310,7 @@ export class DataRecorder {
       }
 
       // Check if market has enough time remaining
-      const endTimeMs = (timestamp + 15 * 60) * 1000; // 15 minutes after start
+      const endTimeMs = (timestamp + intervalMinutes * 60) * 1000;
       const timeUntilEnd = endTimeMs - nowMs;
       if (timeUntilEnd < MIN_REMAINING_MS) {
         console.log(`[DataRecorder] Skipping slot ${startTimeET}: ends in ${Math.round(timeUntilEnd / 1000)}s`);
@@ -326,8 +335,8 @@ export class DataRecorder {
             id: marketId,
             question: marketName,
             slug: eventSlug,
-            endDateIso: new Date((timestamp + 15 * 60) * 1000).toISOString(),
-            endDate: new Date((timestamp + 15 * 60) * 1000).toISOString(),
+            endDateIso: new Date((timestamp + intervalMinutes * 60) * 1000).toISOString(),
+            endDate: new Date((timestamp + intervalMinutes * 60) * 1000).toISOString(),
             active: true,
             closed: false,
           } as Market;
@@ -340,20 +349,21 @@ export class DataRecorder {
       }
     }
 
-    console.log('[DataRecorder] No upcoming 15-min markets found in next 2 hours');
+    console.log(`[DataRecorder] No upcoming ${config.displayName} markets found`);
     return null;
   }
 
   /**
-   * Get upcoming 15-minute slot timestamps
+   * Get upcoming slot timestamps for the configured duration
    * Returns Unix timestamps (in seconds) for upcoming market slots
    */
-  private getUpcoming15MinSlots(now: Date, count: number): Array<{
+  private getUpcomingSlots(now: Date, count: number): Array<{
     timestamp: number;
     startTimeET: string;
     endTimeET: string;
   }> {
     const slots: Array<{ timestamp: number; startTimeET: string; endTimeET: string }> = [];
+    const intervalMinutes = DURATION_CONFIGS[this.durationType].intervalMinutes;
 
     // Get current time in ET
     const etOffsetMs = getETOffsetMinutes(now) * 60 * 1000;
@@ -365,15 +375,15 @@ export class DataRecorder {
     const nowEtMs = nowUtcMs - etOffsetMs;
     const nowEt = new Date(nowEtMs);
 
-    // Round down to the current 15-minute slot in ET
+    // Round down to the current slot in ET
     const etMinutes = nowEt.getUTCMinutes();
-    const slotMinutes = Math.floor(etMinutes / 15) * 15;
+    const slotMinutes = Math.floor(etMinutes / intervalMinutes) * intervalMinutes;
     const currentSlotEt = new Date(nowEt);
     currentSlotEt.setUTCMinutes(slotMinutes, 0, 0);
 
     // Generate upcoming slots
     for (let i = 0; i < count; i++) {
-      const slotEt = new Date(currentSlotEt.getTime() + i * 15 * 60 * 1000);
+      const slotEt = new Date(currentSlotEt.getTime() + i * intervalMinutes * 60 * 1000);
 
       // Convert back to UTC for the timestamp
       const slotUtcMs = slotEt.getTime() + etOffsetMs;
@@ -382,7 +392,7 @@ export class DataRecorder {
       // Format ET times for display
       const startHour = slotEt.getUTCHours();
       const startMin = slotEt.getUTCMinutes();
-      const endSlotEt = new Date(slotEt.getTime() + 15 * 60 * 1000);
+      const endSlotEt = new Date(slotEt.getTime() + intervalMinutes * 60 * 1000);
       const endHour = endSlotEt.getUTCHours();
       const endMin = endSlotEt.getUTCMinutes();
 
@@ -420,6 +430,7 @@ export class DataRecorder {
       noAssetId,
       startTime: startTime.toISOString(),
       endTime: endDate.toISOString(),
+      durationType: this.durationType,
     });
 
     this.currentSession = {

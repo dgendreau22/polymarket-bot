@@ -1,9 +1,9 @@
 /**
- * Bitcoin 15-Minute Market Orchestrator
+ * Bitcoin Market Orchestrator
  *
  * Singleton service that:
- * 1. Discovers next Bitcoin 15-min market on Polymarket
- * 2. Schedules bot creation 5 minutes before market start
+ * 1. Discovers next Bitcoin up/down market on Polymarket (5m, 15m, 1h, 4h, 1d)
+ * 2. Schedules bot creation before market start (configurable lead time)
  * 3. Manages continuous market cycling after each market closes
  */
 
@@ -13,6 +13,11 @@ import { getETOffsetMinutes, formatTime12Hour } from '../utils/time';
 import type { BotConfig, BotMode, BotEvent } from './types';
 import { log, error } from '@/lib/logger';
 import { getDataRecorder } from '@/lib/data';
+import { DURATION_CONFIGS } from './duration-config';
+import type { MarketDuration, DurationConfig } from './duration-config';
+
+export type { MarketDuration, DurationConfig };
+export { DURATION_CONFIGS };
 
 // ============================================================================
 // Types
@@ -39,6 +44,7 @@ export interface OrchestratorConfig {
   leadTimeMinutes: number;
   enabled: boolean;
   recordData: boolean;  // Whether to record market data during trading sessions
+  marketDuration: MarketDuration;
 }
 
 /** Bot info for display */
@@ -90,6 +96,7 @@ class Orchestrator {
     leadTimeMinutes: 5,
     enabled: false,
     recordData: true,  // Default: record market data
+    marketDuration: '15m',
   };
 
   // Track the next scheduled market (waiting for bot start time)
@@ -119,6 +126,10 @@ class Orchestrator {
   private lastSearchTime = 0;
 
   constructor() {}
+
+  private getDurationConfig(): DurationConfig {
+    return DURATION_CONFIGS[this.config.marketDuration || '15m'];
+  }
 
   // ============================================================================
   // Public API
@@ -239,7 +250,7 @@ class Orchestrator {
   // ============================================================================
 
   /**
-   * Find next Bitcoin 15-min market and schedule bot
+   * Find next Bitcoin market and schedule bot
    */
   private async findAndScheduleNextMarket(): Promise<void> {
     // Don't search if we already have a market scheduled
@@ -287,24 +298,23 @@ class Orchestrator {
   }
 
   /**
-   * Discover next upcoming Bitcoin 15-min market
+   * Discover next upcoming Bitcoin market
    * Uses direct event slug lookup based on calculated timestamps
    */
   private async discoverNextMarket(): Promise<ScheduledMarket | null> {
     const gamma = getGammaClient();
+    const dc = this.getDurationConfig();
     const now = new Date();
     const nowMs = now.getTime();
     const MIN_REMAINING_MS = 2 * 60 * 1000; // Need at least 2 minutes remaining to join
 
-    log('Orchestrator', `Searching for markets at ${now.toLocaleString()} (UTC: ${now.toISOString()})`);
+    log('Orchestrator', `Searching for ${dc.displayName} markets at ${now.toLocaleString()} (UTC: ${now.toISOString()})`);
 
-    // Calculate the next few 15-minute slot timestamps
-    // Markets are at :00, :15, :30, :45 of each hour
-    const slotTimestamps = this.getUpcoming15MinSlots(now, 8); // Check next 8 slots (2 hours)
+    const slotTimestamps = this.getUpcomingSlots(now, dc.lookAheadSlots, dc.intervalMinutes);
 
     for (const slotInfo of slotTimestamps) {
       const { timestamp, startTimeET, endTimeET } = slotInfo;
-      const eventSlug = `btc-updown-15m-${timestamp}`;
+      const eventSlug = `btc-updown-${dc.suffix}-${timestamp}`;
 
       // Skip if already scheduled
       if (this.scheduledMarketIds.has(eventSlug)) {
@@ -313,7 +323,7 @@ class Orchestrator {
       }
 
       // Check if market has enough time remaining
-      const endTimeMs = (timestamp + 15 * 60) * 1000; // 15 minutes after start
+      const endTimeMs = (timestamp + dc.intervalMinutes * 60) * 1000;
       const timeUntilEnd = endTimeMs - nowMs;
       if (timeUntilEnd < MIN_REMAINING_MS) {
         log('Orchestrator', `Skipping slot ${startTimeET}: ends in ${Math.round(timeUntilEnd/1000)}s`);
@@ -332,7 +342,7 @@ class Orchestrator {
 
           // Parse times from the slot
           const startTime = new Date(timestamp * 1000);
-          const endTime = new Date((timestamp + 15 * 60) * 1000);
+          const endTime = new Date((timestamp + dc.intervalMinutes * 60) * 1000);
 
           log('Orchestrator', `Found market: ${marketName}`);
           log('Orchestrator', `  -> Market ID: ${marketId}`);
@@ -358,15 +368,15 @@ class Orchestrator {
       }
     }
 
-    log('Orchestrator', 'No upcoming 15-min markets found in next 2 hours');
+    log('Orchestrator', `No upcoming ${dc.displayName} markets found`);
     return null;
   }
 
   /**
-   * Get upcoming 15-minute slot timestamps
+   * Get upcoming slot timestamps for any duration
    * Returns Unix timestamps (in seconds) for upcoming market slots
    */
-  private getUpcoming15MinSlots(now: Date, count: number): Array<{
+  private getUpcomingSlots(now: Date, count: number, intervalMinutes: number): Array<{
     timestamp: number;
     startTimeET: string;
     endTimeET: string;
@@ -384,15 +394,15 @@ class Orchestrator {
     const nowEtMs = nowUtcMs - etOffsetMs;
     const nowEt = new Date(nowEtMs);
 
-    // Round down to the current 15-minute slot in ET
-    const etMinutes = nowEt.getUTCMinutes();
-    const slotMinutes = Math.floor(etMinutes / 15) * 15;
+    // Use total minutes since midnight for durations >= 60m (handles hour boundaries)
+    const totalMinutes = nowEt.getUTCHours() * 60 + nowEt.getUTCMinutes();
+    const slotMinutes = Math.floor(totalMinutes / intervalMinutes) * intervalMinutes;
     const currentSlotEt = new Date(nowEt);
-    currentSlotEt.setUTCMinutes(slotMinutes, 0, 0);
+    currentSlotEt.setUTCHours(Math.floor(slotMinutes / 60), slotMinutes % 60, 0, 0);
 
     // Generate upcoming slots
     for (let i = 0; i < count; i++) {
-      const slotEt = new Date(currentSlotEt.getTime() + i * 15 * 60 * 1000);
+      const slotEt = new Date(currentSlotEt.getTime() + i * intervalMinutes * 60 * 1000);
 
       // Convert back to UTC for the timestamp
       const slotUtcMs = slotEt.getTime() + etOffsetMs;
@@ -401,7 +411,7 @@ class Orchestrator {
       // Format ET times for display
       const startHour = slotEt.getUTCHours();
       const startMin = slotEt.getUTCMinutes();
-      const endSlotEt = new Date(slotEt.getTime() + 15 * 60 * 1000);
+      const endSlotEt = new Date(slotEt.getTime() + intervalMinutes * 60 * 1000);
       const endHour = endSlotEt.getUTCHours();
       const endMin = endSlotEt.getUTCMinutes();
 
@@ -546,8 +556,9 @@ class Orchestrator {
     const recorder = getDataRecorder();
 
     // Build event slug from market start timestamp
+    const dc = this.getDurationConfig();
     const timestamp = Math.floor(market.startTime.getTime() / 1000);
-    const eventSlug = `btc-updown-15m-${timestamp}`;
+    const eventSlug = `btc-updown-${dc.suffix}-${timestamp}`;
 
     try {
       await recorder.startRecordingForMarket({
@@ -571,8 +582,9 @@ class Orchestrator {
     const botManager = getBotManager();
 
     // Create bot config
+    const dc = this.getDurationConfig();
     const botConfig: Omit<BotConfig, 'id'> = {
-      name: `BTC-15m-${this.extractTimeWindow(market.marketName)}`,
+      name: `BTC-${dc.suffix}-${this.extractTimeWindow(market.marketName)}`,
       strategySlug: this.config.strategy,
       marketId: market.marketId,
       marketName: market.marketName,

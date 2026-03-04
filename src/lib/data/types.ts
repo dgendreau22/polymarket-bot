@@ -18,6 +18,7 @@ export interface RecorderStatus {
   state: RecorderState;
   currentSession?: CurrentSession;
   error?: string;
+  durationType?: '5m' | '15m';
 }
 
 export type RecorderEventType =

@@ -659,7 +659,7 @@ export default function BotDetailPage() {
     );
   }
 
-  const strategyName = formatStrategyName(bot.config.strategySlug);
+  const strategyName = strategy?.name || formatStrategyName(bot.config.strategySlug);
 
   // Data-driven checks (not strategy-name based)
   const hasNoAsset = Boolean(bot.config.noAssetId);
@@ -706,6 +706,13 @@ export default function BotDetailPage() {
 
   // Get bot's configured parameters
   const configuredParams = bot.config.strategyConfig || {};
+
+  // Latest BTC price from strategy metrics (for Exchange Lead overlay on price chart)
+  const latestMetricWithBtc = strategyMetrics.length > 0
+    ? strategyMetrics[strategyMetrics.length - 1]
+    : null;
+  const latestBtcPrice = latestMetricWithBtc?.delta ?? null;
+  const latestBtcTimestamp = latestMetricWithBtc?.timestamp ?? null;
 
   return (
     <div className="min-h-screen bg-background">
@@ -1045,12 +1052,13 @@ export default function BotDetailPage() {
 
           {/* Price Chart */}
           <div className="bg-card border rounded-lg p-6 flex flex-col">
-            <h2 className="font-semibold mb-3">Price (15s)</h2>
+            <h2 className="font-semibold mb-3">Price</h2>
             <div className="flex-1 min-h-0 h-full" id="price-chart-container">
               <PriceChart
                 price={lastTrade ? parseFloat(lastTrade.price) : null}
                 timestamp={lastTrade?.timestamp ?? null}
-                pnl={pnl}
+                btcPrice={latestBtcPrice}
+                btcTimestamp={latestBtcTimestamp}
                 intervalSeconds={15}
               />
             </div>

@@ -25,6 +25,77 @@ interface CandleData {
   volume?: number;
 }
 
+interface RawTick {
+  time: number; // epoch seconds
+  price: number;
+}
+
+interface RawBtcTick {
+  time: number; // epoch ms
+  price: number;
+}
+
+const TIMEFRAMES = [
+  { label: "1s", seconds: 1 },
+  { label: "5s", seconds: 5 },
+  { label: "15s", seconds: 15 },
+  { label: "30s", seconds: 30 },
+  { label: "1m", seconds: 60 },
+] as const;
+
+const MAX_RAW_TICKS = 7200; // Store up to ~2 hours of ticks
+const MAX_CANDLES = 300;
+
+function buildCandlesFromTicks(
+  ticks: RawTick[],
+  intervalSec: number
+): CandlestickData[] {
+  const buckets = new Map<number, CandlestickData>();
+  for (const tick of ticks) {
+    const bucketTime = Math.floor(tick.time / intervalSec) * intervalSec;
+    const existing = buckets.get(bucketTime);
+    if (existing) {
+      existing.high = Math.max(existing.high, tick.price);
+      existing.low = Math.min(existing.low, tick.price);
+      existing.close = tick.price;
+    } else {
+      buckets.set(bucketTime, {
+        time: bucketTime as Time,
+        open: tick.price,
+        high: tick.price,
+        low: tick.price,
+        close: tick.price,
+      });
+    }
+  }
+  const candles = Array.from(buckets.values()).sort(
+    (a, b) => (a.time as number) - (b.time as number)
+  );
+  // Trim to max candles (keep latest)
+  if (candles.length > MAX_CANDLES) {
+    return candles.slice(candles.length - MAX_CANDLES);
+  }
+  return candles;
+}
+
+function buildLineDataFromTicks(
+  ticks: { time: number; value: number }[],
+  intervalSec: number
+): LineData[] {
+  const buckets = new Map<number, number>();
+  for (const tick of ticks) {
+    const bucketTime = Math.floor(tick.time / intervalSec) * intervalSec;
+    buckets.set(bucketTime, tick.value); // Last value wins
+  }
+  const data: LineData[] = Array.from(buckets.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([time, value]) => ({ time: time as Time, value }));
+  if (data.length > MAX_CANDLES) {
+    return data.slice(data.length - MAX_CANDLES);
+  }
+  return data;
+}
+
 // Session break interval in seconds (15 minutes)
 const SESSION_BREAK_INTERVAL = 15 * 60;
 
@@ -134,17 +205,17 @@ interface CanvasRenderingTarget2D {
 interface PriceChartProps {
   price: number | null;
   timestamp: string | null;
-  pnl?: number | null;
+  btcPrice?: number | null;
+  btcTimestamp?: number | null;
   intervalSeconds?: number;
   initialCandles?: CandleData[];
 }
 
-const MAX_CANDLES = 100; // Rolling window size
-
 export function PriceChart({
   price,
   timestamp,
-  pnl,
+  btcPrice,
+  btcTimestamp,
   intervalSeconds = 15,
   initialCandles,
 }: PriceChartProps) {
@@ -153,12 +224,20 @@ export function PriceChart({
   // Note: lightweight-charts v5 uses complex generic types that don't work well with refs.
   // Using ReturnType to infer the correct series type from addSeries.
   const seriesRef = useRef<ReturnType<IChartApi["addSeries"]> | null>(null);
-  const pnlSeriesRef = useRef<ReturnType<IChartApi["addSeries"]> | null>(null);
+  const btcSeriesRef = useRef<ReturnType<IChartApi["addSeries"]> | null>(null);
   const sessionBreaksPrimitiveRef = useRef<SessionBreaksPrimitive | null>(null);
   const candlesRef = useRef<CandlestickData[]>([]);
-  const pnlDataRef = useRef<LineData[]>([]);
+  const btcDataRef = useRef<LineData[]>([]);
   const currentCandleTimeRef = useRef<number | null>(null);
   const [chartError, setChartError] = useState<string | null>(null);
+
+  // Timeframe and chart type selection state
+  const [selectedInterval, setSelectedInterval] = useState(intervalSeconds);
+  const [chartType, setChartType] = useState<"candles" | "line">("candles");
+
+  // Raw tick storage for rebuilding on timeframe/type change
+  const rawTicksRef = useRef<RawTick[]>([]);
+  const rawBtcTicksRef = useRef<RawBtcTick[]>([]);
 
   // Get candle time bucket from timestamp
   const getCandleTime = useCallback(
@@ -167,10 +246,49 @@ export function PriceChart({
       const epochMs = date.getTime();
       if (isNaN(epochMs)) return null; // Invalid timestamp
       const epochSeconds = Math.floor(epochMs / 1000);
-      return Math.floor(epochSeconds / intervalSeconds) * intervalSeconds;
+      return Math.floor(epochSeconds / selectedInterval) * selectedInterval;
     },
-    [intervalSeconds]
+    [selectedInterval]
   );
+
+  // Rebuild all series from raw ticks when timeframe/type changes
+  const rebuildFromTicks = useCallback(() => {
+    if (!seriesRef.current) return;
+
+    // Rebuild price data
+    const candles = buildCandlesFromTicks(rawTicksRef.current, selectedInterval);
+    candlesRef.current = candles;
+    currentCandleTimeRef.current = candles.length > 0
+      ? (candles[candles.length - 1].time as number)
+      : null;
+
+    if (chartType === "line") {
+      const lineData: LineData[] = candles.map((c) => ({
+        time: c.time,
+        value: c.close,
+      }));
+      seriesRef.current.setData(lineData);
+    } else {
+      seriesRef.current.setData(candles);
+    }
+
+    // Rebuild BTC line
+    if (btcSeriesRef.current) {
+      const btcTicks = rawBtcTicksRef.current.map((t) => ({
+        time: Math.floor(t.time / 1000),
+        value: t.price,
+      }));
+      const btcData = buildLineDataFromTicks(btcTicks, selectedInterval);
+      btcDataRef.current = btcData;
+      btcSeriesRef.current.setData(btcData);
+    }
+
+    // Update session breaks
+    sessionBreaksPrimitiveRef.current?.updateBreakTimes(candles);
+
+    // Fit content after rebuild
+    chartRef.current?.timeScale().fitContent();
+  }, [selectedInterval, chartType]);
 
   // Initialize chart
   useEffect(() => {
@@ -193,7 +311,7 @@ export function PriceChart({
           borderVisible: false,
         },
         leftPriceScale: {
-          visible: true,
+          visible: false,
           borderVisible: false,
         },
         timeScale: {
@@ -233,27 +351,50 @@ export function PriceChart({
         },
       });
 
-      const series = chart.addSeries(CandlestickSeries, {
-        upColor: "#22c55e",
-        downColor: "#ef4444",
-        borderUpColor: "#22c55e",
-        borderDownColor: "#ef4444",
-        wickUpColor: "#22c55e",
-        wickDownColor: "#ef4444",
+      const series = chartType === "line"
+        ? chart.addSeries(LineSeries, {
+            color: "#22c55e",
+            lineWidth: 2,
+            lastValueVisible: true,
+            priceLineVisible: false,
+            priceFormat: {
+              type: "price",
+              precision: 2,
+              minMove: 0.01,
+            },
+          })
+        : chart.addSeries(CandlestickSeries, {
+            upColor: "#22c55e",
+            downColor: "#ef4444",
+            borderUpColor: "#22c55e",
+            borderDownColor: "#ef4444",
+            wickUpColor: "#22c55e",
+            wickDownColor: "#ef4444",
+            priceFormat: {
+              type: "price",
+              precision: 2,
+              minMove: 0.01,
+            },
+          });
+
+      // Add BTC price line series on its own hidden scale (auto-scales independently)
+      const btcSeries = chart.addSeries(LineSeries, {
+        color: "#f59e0b", // amber/orange
+        lineWidth: 2,
+        priceScaleId: "btc",
+        lastValueVisible: true,
+        priceLineVisible: false,
         priceFormat: {
           type: "price",
-          precision: 2,
-          minMove: 0.01,
+          precision: 0,
+          minMove: 1,
         },
       });
 
-      // Add PnL line series on left scale
-      const pnlSeries = chart.addSeries(LineSeries, {
-        color: "#3b82f6", // blue
-        lineWidth: 2,
-        priceScaleId: "left",
-        lastValueVisible: true,
-        priceLineVisible: false,
+      // Hide the BTC price scale (values shown via last-value label on the line)
+      chart.priceScale("btc").applyOptions({
+        visible: false,
+        scaleMargins: { top: 0.1, bottom: 0.1 },
       });
 
       // Create and attach session breaks primitive
@@ -262,22 +403,22 @@ export function PriceChart({
 
       chartRef.current = chart;
       seriesRef.current = series;
-      pnlSeriesRef.current = pnlSeries;
+      btcSeriesRef.current = btcSeries;
       sessionBreaksPrimitiveRef.current = sessionBreaksPrimitive;
 
       // Clear any previous error
       setChartError(null);
 
-      // Reset data refs when chart reinitializes
+      // Reset candle refs (raw ticks preserved for rebuild)
       candlesRef.current = [];
-      pnlDataRef.current = [];
+      btcDataRef.current = [];
       currentCandleTimeRef.current = null;
 
       return () => {
         chart.remove();
         chartRef.current = null;
         seriesRef.current = null;
-        pnlSeriesRef.current = null;
+        btcSeriesRef.current = null;
         sessionBreaksPrimitiveRef.current = null;
       };
     } catch (error) {
@@ -285,7 +426,13 @@ export function PriceChart({
       setChartError("Failed to load chart");
       return;
     }
-  }, [intervalSeconds]);
+  }, [selectedInterval, chartType]);
+
+  // Rebuild from stored raw ticks after chart reinitializes (timeframe or type change)
+  useEffect(() => {
+    if (!seriesRef.current || rawTicksRef.current.length === 0) return;
+    rebuildFromTicks();
+  }, [selectedInterval, chartType, rebuildFromTicks]);
 
   // Load initial candles when provided (for historical data)
   useEffect(() => {
@@ -323,21 +470,36 @@ export function PriceChart({
     const candleTime = getCandleTime(timestamp);
     if (candleTime === null) return; // Invalid timestamp
 
-    // Update price candles (only if price is provided and valid)
+    // Store raw tick for rebuilding on timeframe change
+    if (price !== null && price !== undefined) {
+      const epochSeconds = Math.floor(new Date(timestamp).getTime() / 1000);
+      const rawTick: RawTick = { time: epochSeconds, price };
+      rawTicksRef.current.push(rawTick);
+      if (rawTicksRef.current.length > MAX_RAW_TICKS) {
+        rawTicksRef.current.shift();
+      }
+    }
+
+    // Update price series (only if price is provided and valid)
     if (price !== null && price !== undefined) {
       const candles = candlesRef.current;
 
       if (currentCandleTimeRef.current === candleTime) {
-        // Update existing candle
+        // Update existing candle bucket
         const lastCandle = candles[candles.length - 1];
         if (lastCandle) {
           lastCandle.high = Math.max(lastCandle.high, price);
           lastCandle.low = Math.min(lastCandle.low, price);
           lastCandle.close = price;
-          seriesRef.current.update(lastCandle);
+
+          if (chartType === "line") {
+            seriesRef.current.update({ time: lastCandle.time, value: price });
+          } else {
+            seriesRef.current.update(lastCandle);
+          }
         }
       } else {
-        // Create new candle
+        // Create new candle bucket
         const newCandle: CandlestickData = {
           time: candleTime as Time,
           open: price,
@@ -354,41 +516,54 @@ export function PriceChart({
           candles.shift();
         }
 
-        seriesRef.current.setData(candles);
+        if (chartType === "line") {
+          const lineData: LineData[] = candles.map((c) => ({
+            time: c.time,
+            value: c.close,
+          }));
+          seriesRef.current.setData(lineData);
+        } else {
+          seriesRef.current.setData(candles);
+        }
 
         // Auto-scroll to latest
         chartRef.current?.timeScale().scrollToRealTime();
       }
     }
 
-    // Update PnL series (only if pnl is provided and valid)
-    if (pnl !== null && pnl !== undefined && pnlSeriesRef.current) {
-      const pnlData = pnlDataRef.current;
+  }, [price, timestamp, getCandleTime, chartType]);
 
-      // Check if we already have a point at this time
-      const lastPoint = pnlData[pnlData.length - 1];
-      if (lastPoint && lastPoint.time === candleTime) {
-        // Update existing point
-        lastPoint.value = pnl;
-        pnlSeriesRef.current.update(lastPoint);
-      } else {
-        // Add new point
-        const newPoint: LineData = {
-          time: candleTime as Time,
-          value: pnl,
-        };
+  // Update BTC price series (driven by strategy metrics, independent of Polymarket ticks)
+  useEffect(() => {
+    if (btcPrice === null || btcPrice === undefined || !btcSeriesRef.current || !btcTimestamp) return;
 
-        pnlData.push(newPoint);
-
-        // Trim to max points
-        if (pnlData.length > MAX_CANDLES) {
-          pnlData.shift();
-        }
-
-        pnlSeriesRef.current.setData(pnlData);
-      }
+    // Store raw BTC tick for rebuilding on timeframe change
+    rawBtcTicksRef.current.push({ time: btcTimestamp, price: btcPrice });
+    if (rawBtcTicksRef.current.length > MAX_RAW_TICKS) {
+      rawBtcTicksRef.current.shift();
     }
-  }, [price, pnl, timestamp, getCandleTime]);
+
+    const candleTime = Math.floor(btcTimestamp / 1000 / selectedInterval) * selectedInterval;
+    const btcData = btcDataRef.current;
+
+    const lastPoint = btcData[btcData.length - 1];
+    if (lastPoint && lastPoint.time === candleTime) {
+      lastPoint.value = btcPrice;
+      btcSeriesRef.current.update(lastPoint);
+    } else {
+      const newPoint: LineData = {
+        time: candleTime as Time,
+        value: btcPrice,
+      };
+      btcData.push(newPoint);
+
+      if (btcData.length > MAX_CANDLES) {
+        btcData.shift();
+      }
+
+      btcSeriesRef.current.setData(btcData);
+    }
+  }, [btcPrice, btcTimestamp, selectedInterval]);
 
   // Update theme when it changes
   useEffect(() => {
@@ -424,9 +599,44 @@ export function PriceChart({
   }
 
   return (
-    <div
-      ref={containerRef}
-      className="w-full h-full"
-    />
+    <div className="w-full h-full flex flex-col">
+      <div className="flex items-center gap-3 mb-2 shrink-0">
+        <div className="flex gap-1">
+          {TIMEFRAMES.map((tf) => (
+            <button
+              key={tf.seconds}
+              onClick={() => setSelectedInterval(tf.seconds)}
+              className={`px-2 py-0.5 text-xs rounded transition-colors ${
+                selectedInterval === tf.seconds
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:bg-muted/80"
+              }`}
+            >
+              {tf.label}
+            </button>
+          ))}
+        </div>
+        <div className="w-px h-4 bg-border" />
+        <div className="flex gap-1">
+          {(["candles", "line"] as const).map((type) => (
+            <button
+              key={type}
+              onClick={() => setChartType(type)}
+              className={`px-2 py-0.5 text-xs rounded transition-colors ${
+                chartType === type
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:bg-muted/80"
+              }`}
+            >
+              {type === "candles" ? "Candles" : "Line"}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div
+        ref={containerRef}
+        className="flex-1 min-h-0"
+      />
+    </div>
   );
 }
